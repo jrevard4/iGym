@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "iGym",
+    "slug": "igym",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.igym.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "iGym uses your location to find nearby gyms.",
+        "NSCameraUsageDescription": "iGym uses the camera to photograph and identify gym equipment with AI.",
+        "NSPhotoLibraryUsageDescription": "iGym uses your photo library to identify gym equipment with AI."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.igym.app",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "iGym needs photo library access to identify gym equipment from images.",
+          "cameraPermission": "iGym needs camera access to photograph and identify equipment."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "iGym uses your location to find nearby gyms."
+        }
+      ],
+      [
+        "@stripe/stripe-react-native",
+        {
+          "merchantIdentifier": "merchant.com.igym.app",
+          "enableGooglePay": false
+        }
+      ]
+    ]
+  }
+}
