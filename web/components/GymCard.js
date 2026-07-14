@@ -1,9 +1,10 @@
 import Link from 'next/link';
-import { getAvgRating, renderStars, isOpenNow } from '../../lib/helpers';
+import { getAvgRating, isOpenNow, getActivePromotion } from '../../lib/helpers';
 
-export default function GymCard({ gym, distanceMi }) {
+export default function GymCard({ gym, distanceMi, match }) {
   const avg = getAvgRating(gym.gymReviews);
   const open = isOpenNow(gym);
+  const promo = getActivePromotion(gym);
 
   return (
     <Link
@@ -28,6 +29,19 @@ export default function GymCard({ gym, distanceMi }) {
       </div>
 
       <p className="text-sm text-gray-600 mb-3 truncate">{gym.location}</p>
+
+      {promo && (
+        <div className="bg-brand/10 text-brand text-xs font-bold px-2.5 py-1.5 rounded-lg mb-3">
+          🔥 {promo.title}
+        </div>
+      )}
+
+      {match && (
+        <div className="bg-violet-50 text-violet-700 text-xs rounded-lg px-2.5 py-1.5 mb-3">
+          <span className="font-bold">✨ {match.score}% match</span>
+          {match.reason && <p className="mt-0.5 text-violet-600 line-clamp-2">{match.reason}</p>}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-1.5 mb-3">
         {open !== null && (

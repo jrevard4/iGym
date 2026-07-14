@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { loadGyms } from '../../../lib/supabase';
-import { getDistanceMiles, getAvgRating, isOpenNow } from '../../../lib/helpers';
-import { CLASS_TYPES, DEFAULT_LOCATION } from '../../../lib/constants';
+import { loadGyms, incrementMatchImpressions, upsertUser } from '../../../lib/supabase';
+import { getDistanceMiles, getAvgRating, isOpenNow, runLocalMatch } from '../../../lib/helpers';
+import { CLASS_TYPES, EQUIP_CATEGORIES, DEFAULT_LOCATION } from '../../../lib/constants';
+import { getSession, setSession } from '@/lib/auth';
 import GymCard from '@/components/GymCard';
 
 export default function GymsListPage() {
@@ -14,9 +15,21 @@ export default function GymsListPage() {
   // Filters
   const [query, setQuery] = useState('');
   const [classFilter, setClassFilter] = useState('All');
+  const [equipCategory, setEquipCategory] = useState('All');
+  const [targetMuscle, setTargetMuscle] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [openNowOnly, setOpenNowOnly] = useState(false);
   const [sortBy, setSortBy] = useState('DISTANCE');
+
+  // AI matchmaker
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [isAiSearching, setIsAiSearching] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [aiSummary, setAiSummary] = useState('');
+  const [aiSuggestions, setAiSuggestions] = useState([]);
+  const [aiMatches, setAiMatches] = useState(null); // null = no AI search active yet
+  const [lastSearchTurn, setLastSearchTurn] = useState(null); // { prompt, summary } — for refinement
+  const [recentSearches, setRecentSearches] = useState([]);
 
   // Location (uses browser geo if available, falls back to DEFAULT_LOCATION)
   const [userLoc, setUserLoc] = useState(DEFAULT_LOCATION);
@@ -42,6 +55,7 @@ export default function GymsListPage() {
         setLoading(false);
       }
     })();
+    setRecentSearches(getSession()?.savedSearches || []);
   }, []);
 
   const filtered = useMemo(() => {
@@ -55,10 +69,20 @@ export default function GymsListPage() {
       if (classFilter !== 'All' && !(g.classes || []).includes(classFilter)) return false;
       if (maxPrice && g.monthlyPrice > Number(maxPrice)) return false;
       if (openNowOnly && isOpenNow(g) === false) return false;
+      if (equipCategory !== 'All' || targetMuscle) {
+        const hasMatch = (g.equipment || []).some((eq) => {
+          if (equipCategory !== 'All' && eq.category !== equipCategory) return false;
+          if (targetMuscle && !(eq.targetArea || '').toLowerCase().includes(targetMuscle.toLowerCase())) return false;
+          return true;
+        });
+        if (!hasMatch) return false;
+      }
+      if (aiMatches && !aiMatches[g.id]) return false;
       return true;
     });
 
     list = list.sort((a, b) => {
+      if (aiMatches) return (aiMatches[b.id]?.score || 0) - (aiMatches[a.id]?.score || 0);
       // Featured always first when sorting by distance
       if (sortBy === 'DISTANCE') {
         if (a.featured && !b.featured) return -1;
@@ -74,7 +98,67 @@ export default function GymsListPage() {
     });
 
     return list;
-  }, [gyms, query, classFilter, maxPrice, openNowOnly, sortBy, userLoc]);
+  }, [gyms, query, classFilter, equipCategory, targetMuscle, maxPrice, openNowOnly, sortBy, userLoc, aiMatches]);
+
+  const saveRecentSearch = (prompt) => {
+    const session = getSession();
+    if (!session) return; // recent-search history is a logged-in perk, same as mobile
+    const updated = [prompt, ...(session.savedSearches || []).filter((s) => s.toLowerCase() !== prompt.toLowerCase())].slice(0, 5);
+    setRecentSearches(updated);
+    const nextSession = { ...session, savedSearches: updated };
+    setSession(nextSession);
+    upsertUser(nextSession);
+  };
+
+  // isRefine carries the previous search's context forward (via lastSearchTurn)
+  // instead of resetting — powers the "Refine" suggestion chips.
+  const runAISearch = async (promptOverride, isRefine = false) => {
+    const prompt = (promptOverride ?? aiPrompt).trim();
+    if (!prompt) return;
+    setAiPrompt(prompt);
+    setIsAiSearching(true);
+    setAiError('');
+    if (!isRefine) { setAiSummary(''); setAiSuggestions([]); setLastSearchTurn(null); }
+    try {
+      const res = await fetch('/api/matchmaker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, gyms, previousTurn: isRefine ? lastSearchTurn : null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'AI search failed.');
+      const matchMap = {};
+      (data.matches || []).forEach((m) => {
+        matchMap[m.gymId] = { score: m.score, reason: m.reason, highlights: m.highlights || [] };
+      });
+      setAiMatches(matchMap);
+      setAiSummary(data.summary || '');
+      setAiSuggestions(data.suggestions || []);
+      setLastSearchTurn({ prompt, summary: data.summary || '' });
+    } catch (err) {
+      setAiError(`${err.message} Showing local results instead.`);
+      setAiMatches(runLocalMatch(prompt, gyms));
+      setLastSearchTurn({ prompt, summary: '' });
+    } finally {
+      setIsAiSearching(false);
+      saveRecentSearch(prompt);
+    }
+  };
+
+  // Fire-and-forget: log which gyms surfaced in this AI search as a search-interest signal.
+  useEffect(() => {
+    if (!aiMatches) return;
+    Object.keys(aiMatches).forEach((gymId) => incrementMatchImpressions(gymId));
+  }, [aiMatches]);
+
+  const clearAISearch = () => {
+    setAiMatches(null);
+    setAiPrompt('');
+    setAiSummary('');
+    setAiSuggestions([]);
+    setAiError('');
+    setLastSearchTurn(null);
+  };
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
@@ -82,6 +166,75 @@ export default function GymsListPage() {
       <p className="text-gray-600 mb-8">
         {loading ? 'Loading...' : `${filtered.length} ${filtered.length === 1 ? 'gym' : 'gyms'} found near you`}
       </p>
+
+      {/* ── AI matchmaker ────────────────────────────────────────────── */}
+      <div className="bg-gradient-to-br from-violet-600 to-brand rounded-2xl p-5 mb-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-3 text-white">
+          <span className="text-xl">✨</span>
+          <h2 className="font-bold">AI Matchmaker — tell us your goal</h2>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            type="text"
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && runAISearch()}
+            placeholder='e.g. "build leg strength for sprinting, budget under $50/mo"'
+            className="flex-1 px-4 py-3 rounded-lg border-0 outline-none focus:ring-2 focus:ring-white/50"
+          />
+          <button
+            onClick={() => runAISearch()}
+            disabled={isAiSearching || !aiPrompt.trim()}
+            className="bg-white text-brand font-bold px-6 py-3 rounded-lg hover:bg-white/90 transition disabled:opacity-60 shrink-0"
+          >
+            {isAiSearching ? 'Searching...' : 'Find my gym'}
+          </button>
+          {aiMatches && (
+            <button
+              onClick={clearAISearch}
+              className="bg-white/15 text-white font-semibold px-4 py-3 rounded-lg hover:bg-white/25 transition shrink-0"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        {aiError && <p className="text-white/90 text-sm mt-2">{aiError}</p>}
+        {aiSummary && <p className="text-white text-sm mt-3 font-medium">{aiSummary}</p>}
+        {aiSuggestions.length > 0 && (
+          <div className="mt-3">
+            <p className="text-white/70 text-xs font-semibold uppercase mb-2">🔄 Refine</p>
+            <div className="flex flex-wrap gap-2">
+              {aiSuggestions.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => runAISearch(s, true)}
+                  disabled={isAiSearching}
+                  className="bg-white/15 hover:bg-white/25 text-white text-xs font-semibold px-3 py-1.5 rounded-full transition disabled:opacity-60"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {!aiMatches && recentSearches.length > 0 && (
+          <div className="mt-3">
+            <p className="text-white/70 text-xs font-semibold uppercase mb-2">Recent searches</p>
+            <div className="flex flex-wrap gap-2">
+              {recentSearches.map((s) => (
+                <button
+                  key={s}
+                  onClick={() => runAISearch(s, false)}
+                  disabled={isAiSearching}
+                  className="bg-white/15 hover:bg-white/25 text-white text-xs font-semibold px-3 py-1.5 rounded-full transition disabled:opacity-60"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* ── Filter bar ────────────────────────────────────────────────── */}
       <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-8 sticky top-[73px] z-30 shadow-sm">
@@ -118,6 +271,24 @@ export default function GymsListPage() {
             <option value="RATING">⭐ Top rated</option>
             <option value="PRICE">💲 Cheapest first</option>
           </select>
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3 mb-3">
+          <select
+            value={equipCategory}
+            onChange={(e) => setEquipCategory(e.target.value)}
+            className="px-4 py-2.5 border border-gray-300 rounded-lg bg-white"
+          >
+            <option value="All">Any equipment category</option>
+            {EQUIP_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+          </select>
+          <input
+            type="text"
+            placeholder="Target muscle (e.g. Chest, Quads)"
+            value={targetMuscle}
+            onChange={(e) => setTargetMuscle(e.target.value)}
+            className="px-4 py-2.5 border border-gray-300 rounded-lg"
+          />
         </div>
 
         <label className="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
@@ -161,6 +332,7 @@ export default function GymsListPage() {
               key={gym.id}
               gym={gym}
               distanceMi={getDistanceMiles(userLoc.latitude, userLoc.longitude, gym.lat, gym.lon)}
+              match={aiMatches?.[gym.id]}
             />
           ))}
         </div>

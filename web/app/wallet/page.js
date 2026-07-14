@@ -4,12 +4,14 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, setSession } from '@/lib/auth';
-import { loadUserPasses } from '../../../lib/supabase';
+import { loadUserPasses, loadUserCheckins } from '../../../lib/supabase';
+import { computeCheckinStats } from '../../../lib/helpers';
 
 export default function WalletPage() {
   const router = useRouter();
   const [user, setUser] = useState(null);
   const [passes, setPasses] = useState([]);
+  const [checkins, setCheckins] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -23,8 +25,12 @@ export default function WalletPage() {
     // Refresh passes from DB so any pass purchased on mobile shows up here too
     (async () => {
       try {
-        const fresh = await loadUserPasses(session.id);
+        const [fresh, checkinRows] = await Promise.all([
+          loadUserPasses(session.id),
+          loadUserCheckins(session.id),
+        ]);
         setPasses(fresh);
+        setCheckins(checkinRows);
         setSession({ ...session, activePasses: fresh });
       } catch {
         setPasses(session.activePasses || []);
@@ -49,6 +55,10 @@ export default function WalletPage() {
         Active passes for {user.firstName || user.username}. Open the iGym mobile app to scan in at the front desk.
       </p>
 
+      {checkins.length > 0 && <StreakCard checkins={checkins} />}
+
+      {user.referralCode && <ReferralCard user={user} />}
+
       {passes.length === 0 ? (
         <div className="text-center py-20 border-2 border-dashed border-gray-200 rounded-2xl">
           <div className="text-5xl mb-4">🎟️</div>
@@ -65,13 +75,14 @@ export default function WalletPage() {
         <ul className="space-y-4">
           {passes.map((pass) => {
             const expired = pass.expiresAt && new Date(pass.expiresAt) < new Date();
+            const upcoming = !expired && pass.startsAt && new Date(pass.startsAt) > new Date();
             const hasPunch = pass.remainingPunches != null;
             return (
               <li
                 key={pass.id}
                 className={
                   'bg-white border-2 rounded-2xl p-5 transition ' +
-                  (expired ? 'opacity-60 border-gray-200' : 'border-gray-900')
+                  (expired ? 'opacity-60 border-gray-200' : upcoming ? 'border-amber-300' : 'border-gray-900')
                 }
               >
                 <div className="flex justify-between items-start mb-3">
@@ -84,10 +95,12 @@ export default function WalletPage() {
                       'text-sm font-bold px-3 py-1 rounded-full ' +
                       (expired
                         ? 'bg-red-100 text-red-700'
+                        : upcoming
+                        ? 'bg-amber-100 text-amber-700'
                         : 'bg-green-100 text-green-700')
                     }
                   >
-                    {expired ? 'Expired' : 'Active'}
+                    {expired ? 'Expired' : upcoming ? `Starts ${new Date(pass.startsAt).toLocaleDateString()}` : 'Active'}
                   </span>
                 </div>
                 <div className="flex justify-between items-end pt-3 border-t border-gray-100">
@@ -115,6 +128,65 @@ export default function WalletPage() {
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+// ─── Streak card ──────────────────────────────────────────────────────────
+function StreakCard({ checkins }) {
+  const stats = computeCheckinStats(checkins);
+  return (
+    <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5 mb-8">
+      <div className="flex justify-between items-center">
+        <span className="font-bold text-indigo-700">🔥 {stats.currentStreak}-day streak</span>
+        <span className="font-semibold text-indigo-700">{stats.totalVisits} visits</span>
+      </div>
+      {stats.badges.length > 0 && (
+        <div className="flex flex-wrap gap-2 mt-3">
+          {stats.badges.map((b) => (
+            <span key={b.threshold} className="bg-white border border-indigo-200 text-indigo-700 text-xs font-bold px-3 py-1 rounded-full">
+              🏅 {b.label}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Referral card ────────────────────────────────────────────────────────
+function ReferralCard({ user }) {
+  const [copied, setCopied] = useState(false);
+  const link = typeof window !== 'undefined'
+    ? `${window.location.origin}/register?ref=${user.referralCode}`
+    : '';
+
+  const share = async () => {
+    if (navigator.share) {
+      try { await navigator.share({ title: 'iGym', text: 'Find your next gym on iGym:', url: link }); }
+      catch { /* user cancelled the share sheet */ }
+      return;
+    }
+    await navigator.clipboard.writeText(link);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="bg-gray-900 text-white rounded-2xl p-5 mb-8 flex items-center justify-between gap-4 flex-wrap">
+      <div>
+        <div className="font-bold mb-1">🎁 Invite a friend</div>
+        <div className="text-sm text-gray-300">
+          Your code: <span className="font-mono font-bold text-white">{user.referralCode}</span>
+          {user.referralCount > 0 && <span className="ml-2 text-gray-400">· {user.referralCount} joined so far</span>}
+        </div>
+      </div>
+      <button
+        onClick={share}
+        className="bg-white text-gray-900 font-semibold px-4 py-2 rounded-lg hover:bg-white/90 transition shrink-0"
+      >
+        {copied ? 'Link copied!' : 'Share iGym'}
+      </button>
     </div>
   );
 }

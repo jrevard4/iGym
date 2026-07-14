@@ -17,15 +17,19 @@ web/
 │   ├── login/page.js          # Member login
 │   ├── register/page.js       # Member signup
 │   ├── wallet/page.js         # Logged-in member's pass list
-│   └── gyms/
-│       ├── page.js            # Directory with search + filters
-│       └── [id]/page.js       # Gym detail (equipment, reviews, passes)
+│   ├── gyms/
+│   │   ├── page.js            # Directory with search + filters
+│   │   └── [id]/page.js       # Gym detail (equipment, reviews, passes)
+│   └── checkout/
+│       ├── [gymId]/page.js    # Stripe Elements checkout for a pass
+│       └── return/page.js     # Completes redirect-based Stripe payment methods
 ├── components/
 │   ├── Header.js              # Sticky top nav (auth-aware)
 │   ├── Footer.js
 │   └── GymCard.js             # Shared gym card used in the directory
 ├── lib/
-│   └── auth.js                # localStorage session helper
+│   ├── auth.js                # localStorage session helper
+│   └── checkout.js            # finalizePassPurchase — savePass + recordPassSale after payment
 ├── next.config.mjs            # Allows imports from ../lib
 ├── tailwind.config.js
 ├── postcss.config.js
@@ -96,23 +100,20 @@ Same as the mobile app (auto-seeded by it):
 - **Wallet** at `/wallet` — list of active passes (gated to logged-in users), refreshes from DB so passes bought in the mobile app appear here
 - **Auth-aware header** — switches between Login/Get Started and user name + Sign out
 - **Tailwind-based UI** matching the mobile app's color palette and typography
+- **Real Stripe Checkout** at `/checkout/[gymId]` — clicking "Buy Pass" now takes the member to a dedicated checkout page using Stripe Elements (`@stripe/stripe-js` + `@stripe/react-stripe-js`) against the existing `server/index.js` `/create-payment-intent` endpoint. On success it calls `finalizePassPurchase` (`web/lib/checkout.js`), which mirrors the mobile app's `handlePaymentSubmit` — same pass shape, same `savePass` + `recordPassSale` calls. Redirect-based payment methods complete on `/checkout/return`. If Stripe isn't configured or the backend is unreachable, the page falls back to a "demo mode" purchase that skips payment entirely (same fallback the mobile app has).
 
 ### ⏳ Left to build
 
-1. **Real Stripe Checkout.** The "Buy Pass" button currently shows an alert pointing users to the mobile app. To finish:
-   - Use the existing `server/index.js` `/create-payment-intent` endpoint (the mobile app already calls this)
-   - Add `@stripe/stripe-js` to `web/package.json` and use Stripe Elements or Checkout in the browser
-   - On success, call `savePass` + `recordPassSale` from `../lib/supabase.js` (same flow as the mobile app's `handlePaymentSubmit`)
-2. **Owner dashboard.** All the screens the mobile app has (front desk scanner, inventory, analytics, subscription) need web counterparts. The underlying `lib/` calls work; the JSX needs to be rewritten with Tailwind.
-3. **Equipment search + AI identifier for owners.** The shared `lib/ai.js` already exposes `matchmakerSearch`, `identifyEquipmentFromImage`, and `searchEquipmentOnWeb` — they're plain `fetch` calls and work the same in Next.js. Wire them into web pages when you build the owner dashboard.
-4. **AI Matchmaker for members.** Same shared module — drop into the directory page above the filter bar.
-5. **Mapbox or Google Maps view.** The mobile app uses `react-native-maps` which doesn't work on web. Use `mapbox-gl` or `@vis.gl/react-google-maps` for the web map view.
-6. **Production auth.** Current setup stores user objects in `localStorage` to match the mobile app. Before launch, swap to **Supabase Auth + `@supabase/ssr`** so sessions are server-validated cookies. Pattern:
+1. **Owner dashboard.** All the screens the mobile app has (front desk scanner, inventory, analytics, subscription) need web counterparts. The underlying `lib/` calls work; the JSX needs to be rewritten with Tailwind.
+2. **Equipment search + AI identifier for owners.** The shared `lib/ai.js` already exposes `matchmakerSearch`, `identifyEquipmentFromImage`, and `searchEquipmentOnWeb` — they're plain `fetch` calls and work the same in Next.js. Wire them into web pages when you build the owner dashboard.
+3. **AI Matchmaker for members.** Same shared module — drop into the directory page above the filter bar.
+4. **Mapbox or Google Maps view.** The mobile app uses `react-native-maps` which doesn't work on web. Use `mapbox-gl` or `@vis.gl/react-google-maps` for the web map view.
+5. **Production auth.** Current setup stores user objects in `localStorage` to match the mobile app. Before launch, swap to **Supabase Auth + `@supabase/ssr`** so sessions are server-validated cookies. Pattern:
    ```bash
    npm install @supabase/ssr
    ```
    Then add `middleware.js` at the web/ root and replace `web/lib/auth.js` with `createServerClient` / `createBrowserClient` from `@supabase/ssr`.
-7. **SEO.** Convert `/gyms` and `/gyms/[id]` to Server Components and pre-render gym pages with `generateStaticParams` for SEO. The current implementation is client-only because it needs interactive filters — split into a server-rendered shell + client island for filters.
+6. **SEO.** Convert `/gyms` and `/gyms/[id]` to Server Components and pre-render gym pages with `generateStaticParams` for SEO. The current implementation is client-only because it needs interactive filters — split into a server-rendered shell + client island for filters.
 
 ---
 

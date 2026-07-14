@@ -1,17 +1,27 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useState } from 'react';
-import { registerUser } from '../../../lib/supabase';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense, useState } from 'react';
+import { registerUser, redeemReferral } from '../../../lib/supabase';
 import { US_STATES } from '../../../lib/constants';
 import { setSession } from '@/lib/auth';
 
 export default function RegisterPage() {
+  return (
+    <Suspense>
+      <RegisterForm />
+    </Suspense>
+  );
+}
+
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [form, setForm] = useState({
     firstName: '', lastName: '', email: '', username: '', password: '',
     address: '', city: '', state: '', zip: '',
+    referredBy: searchParams.get('ref') || '',
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -26,12 +36,16 @@ export default function RegisterPage() {
     setBusy(true);
     setError('');
     try {
-      const result = await registerUser({ ...form, favorites: [], activePasses: [], phone: '' });
+      const referralCode = form.username.trim().toUpperCase().slice(0, 6) + (Date.now() % 1000);
+      const referredBy = form.referredBy.trim().toUpperCase() || null;
+      const { referredBy: _rb, ...rest } = form;
+      const result = await registerUser({ ...rest, referralCode, referredBy, favorites: [], activePasses: [], phone: '' });
       if (result.error) {
         setError(result.error);
         setBusy(false);
         return;
       }
+      if (referredBy) redeemReferral(referredBy);
       setSession({ ...result.user, activePasses: [] });
       router.push('/gyms');
     } catch (err) {
@@ -67,6 +81,13 @@ export default function RegisterPage() {
           <input className={cls + ' mt-3'} placeholder="Choose a username" value={form.username} onChange={update('username')} autoComplete="username" />
           <input className={cls + ' mt-3'} type="password" placeholder="Choose a password" value={form.password} onChange={update('password')} autoComplete="new-password" />
         </div>
+
+        <input
+          className={cls}
+          placeholder="Referral code (optional)"
+          value={form.referredBy}
+          onChange={update('referredBy')}
+        />
 
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>

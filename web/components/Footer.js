@@ -23,8 +23,8 @@ export default function Footer() {
         <div>
           <div className="font-semibold mb-3 text-gray-900">For Gym Owners</div>
           <ul className="space-y-2 text-gray-600">
-            <li>Owner portal — coming to web soon</li>
-            <li>For now, manage your gym in the iGym mobile app</li>
+            <li><a href="/owner/login" className="hover:text-brand">Owner Portal →</a></li>
+            <li>AI photo tools still live in the iGym mobile app</li>
           </ul>
         </div>
       </div>

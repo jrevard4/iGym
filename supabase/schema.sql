@@ -21,6 +21,11 @@ create table if not exists users (
   zip text,
   favorites jsonb default '[]'::jsonb,
   "activePasses" jsonb default '[]'::jsonb,
+  "referralCode" text unique,
+  "referredBy" text,
+  "referralCount" int default 0,
+  "pushToken" text,
+  "savedSearches" jsonb default '[]'::jsonb,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -59,6 +64,8 @@ create table if not exists gyms (
   "totalPassRevenue" numeric default 0,
   "platformFeesPaid" numeric default 0,
   "monthlyPassSales" int default 0,
+  promotions jsonb default '[]'::jsonb,
+  "matchImpressions" int default 0,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -80,6 +87,7 @@ create table if not exists passes (
   type text,                       -- 'TIME' | 'PUNCH'
   value int,
   "purchasedAt" timestamptz,
+  "startsAt" timestamptz,           -- null = active immediately; future date = scheduled for later (e.g. travel)
   "expiresAt" timestamptz,
   "remainingPunches" int,
   "totalPunches" int,
@@ -90,6 +98,19 @@ create table if not exists passes (
 create index if not exists idx_passes_userId on passes ("userId");
 create index if not exists idx_passes_gymId on passes ("gymId");
 create index if not exists idx_passes_expiresAt on passes ("expiresAt");
+
+-- ─── CHECK-INS ─────────────────────────────────────────────────────
+-- One row per successful pass scan (front desk or in-app). Powers the
+-- member streak/visit-count gamification — nothing else persists this today.
+create table if not exists checkins (
+  id text primary key,
+  "userId" text references users(id) on delete cascade,
+  "gymId" text references gyms(id) on delete cascade,
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_checkins_userId on checkins ("userId");
+create index if not exists idx_checkins_gymId on checkins ("gymId");
 
 -- ─── ATOMIC REVENUE RPC ────────────────────────────────────────────
 -- Increments the gym's revenue counters without read-modify-write races.
@@ -107,6 +128,39 @@ begin
 end;
 $$ language plpgsql security definer;
 
+-- Atomically bumps the referring user's referralCount. Called once when a
+-- new user registers with a valid ?ref= code.
+create or replace function increment_referral_count(
+  p_referral_code text
+) returns void as $$
+begin
+  update users set "referralCount" = coalesce("referralCount", 0) + 1
+  where "referralCode" = p_referral_code;
+end;
+$$ language plpgsql security definer;
+
+-- Atomically bumps a gym's referralCount when another gym owner registers
+-- using its referral code.
+create or replace function increment_gym_referral_count(
+  p_referral_code text
+) returns void as $$
+begin
+  update gyms set "referralCount" = coalesce("referralCount", 0) + 1
+  where "referralCode" = p_referral_code;
+end;
+$$ language plpgsql security definer;
+
+-- Atomically bumps a gym's search-interest counter whenever it appears in
+-- AI matchmaker or local-match results.
+create or replace function increment_match_impressions(
+  p_gym_id text
+) returns void as $$
+begin
+  update gyms set "matchImpressions" = coalesce("matchImpressions", 0) + 1
+  where id = p_gym_id;
+end;
+$$ language plpgsql security definer;
+
 -- ─── ROW LEVEL SECURITY ────────────────────────────────────────────
 -- For an MVP using a single ANON key, RLS is left disabled — the anon key
 -- can read/write everything. Before production, enable RLS and tighten policies.
@@ -118,3 +172,30 @@ $$ language plpgsql security definer;
 -- Example policy: users can only see their own passes
 -- create policy "users see their own passes" on passes
 --   for select using (auth.uid()::text = "userId");
+
+-- ─── MIGRATION (run once if your `users`/`gyms` tables already exist) ──
+-- `create table if not exists` above won't add columns to a live table.
+-- If you provisioned this schema before the referral/promotions/impressions
+-- columns were added, run this block once in the SQL editor — it's additive
+-- and safe to run against existing rows.
+--
+-- alter table users add column if not exists "referralCode" text unique;
+-- alter table users add column if not exists "referredBy" text;
+-- alter table users add column if not exists "referralCount" int default 0;
+-- alter table gyms  add column if not exists promotions jsonb default '[]'::jsonb;
+-- alter table gyms  add column if not exists "matchImpressions" int default 0;
+--
+-- Phase 2 additions:
+-- alter table users add column if not exists "pushToken" text;
+-- alter table users add column if not exists "savedSearches" jsonb default '[]'::jsonb;
+-- create table if not exists checkins (
+--   id text primary key,
+--   "userId" text references users(id) on delete cascade,
+--   "gymId" text references gyms(id) on delete cascade,
+--   created_at timestamptz default now()
+-- );
+-- create index if not exists idx_checkins_userId on checkins ("userId");
+-- create index if not exists idx_checkins_gymId on checkins ("gymId");
+--
+-- Phase 3 additions:
+-- alter table passes add column if not exists "startsAt" timestamptz;

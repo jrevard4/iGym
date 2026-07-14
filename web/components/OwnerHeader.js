@@ -1,0 +1,66 @@
+'use client';
+
+import Link from 'next/link';
+import { usePathname, useRouter } from 'next/navigation';
+import { clearOwnerSession } from '@/lib/ownerAuth';
+
+const TABS = [
+  { href: '/owner', label: 'Desk' },
+  { href: '/owner/inventory', label: 'Inventory' },
+  { href: '/owner/profile', label: 'Profile' },
+  { href: '/owner/trainers', label: 'Trainers' },
+  { href: '/owner/members', label: 'Members' },
+  { href: '/owner/analytics', label: 'Analytics' },
+];
+
+export default function OwnerHeader({ gymName }) {
+  const pathname = usePathname();
+  const router = useRouter();
+
+  const onLogout = () => {
+    clearOwnerSession();
+    router.push('/owner/login');
+  };
+
+  return (
+    <header className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b border-gray-200">
+      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Link href="/" className="text-2xl font-black tracking-tight">
+            <span className="text-brand">i</span>Gym
+          </Link>
+          <span className="hidden sm:inline text-xs font-semibold text-gray-400 uppercase tracking-wide border-l border-gray-200 pl-3">
+            Owner Console
+          </span>
+        </div>
+        <div className="flex items-center gap-4">
+          {gymName && (
+            <span className="hidden sm:inline text-sm text-gray-600">
+              <span className="font-semibold text-gray-900">{gymName}</span>
+            </span>
+          )}
+          <button onClick={onLogout} className="text-sm font-medium text-gray-600 hover:text-danger transition">
+            Logout
+          </button>
+        </div>
+      </div>
+      <nav className="max-w-6xl mx-auto px-6 flex gap-1 overflow-x-auto pb-3">
+        {TABS.map((t) => {
+          const active = pathname === t.href;
+          return (
+            <Link
+              key={t.href}
+              href={t.href}
+              className={
+                'px-3.5 py-1.5 rounded-lg text-sm font-semibold whitespace-nowrap transition ' +
+                (active ? 'bg-brand text-white' : 'text-gray-600 hover:bg-gray-100')
+              }
+            >
+              {t.label}
+            </Link>
+          );
+        })}
+      </nav>
+    </header>
+  );
+}

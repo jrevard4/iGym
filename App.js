@@ -9,12 +9,14 @@ import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   SafeAreaView, TextInput, ScrollView, ImageBackground, StatusBar,
   KeyboardAvoidingView, Platform, Modal, Image, Alert, ActivityIndicator,
-  Switch, Linking, Animated, Easing, RefreshControl,
+  Switch, Linking, Animated, Easing, RefreshControl, Share,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import MapView, { Marker, Circle } from 'react-native-maps';
 import QRCode from 'react-native-qrcode-svg';
 import { StripeProvider, useStripe } from '@stripe/stripe-react-native';
@@ -26,18 +28,48 @@ import {
 } from './lib/constants';
 import {
   getDistanceMiles, getAvgRating, renderStars, isOpenNow, getAIMatchScore,
-  runLocalMatch, uniqueId,
+  runLocalMatch, uniqueId, getActivePromotion, computeCheckinStats,
 } from './lib/helpers';
 import {
   loadUsers, upsertUser, loginUser as dbLoginUser, registerUser as dbRegisterUser,
   loadGyms, upsertGym, loginOwner as dbLoginOwner,
   addGymReview, recordPassSale, savePass, loadUserPasses, updatePass, deletePass,
-  getPassById, seedRealGymsIfNeeded, loadGymPasses,
+  getPassById, seedRealGymsIfNeeded, loadGymPasses, redeemReferral, redeemGymReferral, incrementMatchImpressions,
+  recordCheckin, loadUserCheckins,
 } from './lib/supabase';
 import { matchmakerSearch, identifyEquipmentFromImage, searchEquipmentOnWeb, AIError } from './lib/ai';
+import { sendPushNotifications } from './lib/push';
 import { GLOBAL_EQUIPMENT_DATABASE } from './lib/equipment-db';
 import { INITIAL_OWNER_DATA, REAL_GYMS_DATA } from './lib/gyms-seed';
 import ErrorBoundary from './components/ErrorBoundary';
+
+// Foreground notifications still show a banner/alert instead of being silently queued.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true, shouldPlaySound: false, shouldSetBadge: false,
+  }),
+});
+
+// Best-effort push token registration — never blocks login if it fails
+// (simulators, denied permissions, and missing EAS project config all no-op here).
+async function registerForPushToken() {
+  try {
+    if (!Constants.isDevice && Platform.OS !== 'web') { /* still try — some simulators support it */ }
+    const { status: existing } = await Notifications.getPermissionsAsync();
+    let status = existing;
+    if (status !== 'granted') {
+      const req = await Notifications.requestPermissionsAsync();
+      status = req.status;
+    }
+    if (status !== 'granted') return null;
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+    const tokenResponse = await Notifications.getExpoPushTokenAsync(projectId ? { projectId } : undefined);
+    return tokenResponse.data;
+  } catch (e) {
+    console.warn('[push] registration skipped:', e.message || e);
+    return null;
+  }
+}
 
 function IGymApp() {
   // --- Persisted databases (in-memory mirror of Supabase) ---
@@ -75,6 +107,7 @@ function IGymApp() {
 
   // --- Payment / pass ---
   const [selectedPass, setSelectedPass] = useState(null);
+  const [selectedPassStartDate, setSelectedPassStartDate] = useState(new Date());
   const [viewingQR, setViewingQR] = useState(null);
   const [cardDetails, setCardDetails] = useState({ number:'', exp:'', cvv:'', name:'' });
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
@@ -92,6 +125,7 @@ function IGymApp() {
   const [expandedMatchId, setExpandedMatchId] = useState(null);
   const [aiError, setAiError] = useState('');
   const [usingRealAI, setUsingRealAI] = useState(false);
+  const [lastSearchTurn, setLastSearchTurn] = useState(null); // { prompt, summary } of the previous search, for refinement
 
   // --- AI equipment identification ---
   const [isIdentifyingEquip, setIsIdentifyingEquip] = useState(false);
@@ -130,6 +164,9 @@ function IGymApp() {
   // --- Owner scan log (session-only, not persisted) ---
   const [ownerScanLog, setOwnerScanLog] = useState([]);
 
+  // --- Member check-in streak ---
+  const [memberCheckins, setMemberCheckins] = useState([]);
+
   // --- Owner members (passes at this gym) ---
   const [ownerMembers, setOwnerMembers] = useState([]);
   const [ownerMembersLoading, setOwnerMembersLoading] = useState(false);
@@ -149,8 +186,8 @@ function IGymApp() {
   const [ownerIDInput, setOwnerIDInput] = useState('');
   const [ownerPassInput, setOwnerPassInput] = useState('');
   const [reviewInput, setReviewInput] = useState('');
-  const [regData, setRegData] = useState({ firstName:'', lastName:'', username:'', password:'', email:'', address:'', city:'', state:'Select State', zip:'' });
-  const [ownerRegData, setOwnerRegData] = useState({ gymName:'', ownerID:'', password:'', email:'', businessTaxID:'' });
+  const [regData, setRegData] = useState({ firstName:'', lastName:'', username:'', password:'', email:'', address:'', city:'', state:'Select State', zip:'', referredBy:'' });
+  const [ownerRegData, setOwnerRegData] = useState({ gymName:'', ownerID:'', password:'', email:'', businessTaxID:'', referredBy:'' });
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [datePickerField, setDatePickerField] = useState('mfgDate');
   const [showStateMenu, setShowStateMenu] = useState(false);
@@ -159,8 +196,16 @@ function IGymApp() {
   const [newPassPrice, setNewPassPrice] = useState('');
   const [newPassType, setNewPassType] = useState('TIME');
   const [newPassValue, setNewPassValue] = useState('');
+  const [newPromoTitle, setNewPromoTitle] = useState('');
+  const [newPromoDetail, setNewPromoDetail] = useState('');
+  const [newPromoDays, setNewPromoDays] = useState('7');
 
   useEffect(() => { if (currentUser) setProfileEditForm(currentUser); }, [currentUser]);
+
+  useEffect(() => {
+    if (!currentUser?.id) { setMemberCheckins([]); return; }
+    loadUserCheckins(currentUser.id).then(setMemberCheckins);
+  }, [currentUser?.id]);
 
   // --- BOOT ---
   useEffect(() => {
@@ -201,8 +246,12 @@ function IGymApp() {
         if (activeUserJson) {
           const cached = JSON.parse(activeUserJson);
           const passes = await loadUserPasses(cached.id);
-          setCurrentUser({ ...cached, activePasses: passes });
+          const restoredUser = { ...cached, activePasses: passes };
+          setCurrentUser(restoredUser);
           setCurrentScreen('GYM_NETWORK');
+          registerForPushToken().then(pushToken => {
+            if (pushToken && pushToken !== cached.pushToken) upsertUser({ ...restoredUser, pushToken });
+          });
         } else if (activeOwnerJson) {
           const cached = JSON.parse(activeOwnerJson);
           const freshOwner = (gyms || []).find(o => o.id === cached.id) || cached;
@@ -309,6 +358,10 @@ function IGymApp() {
       setOwnerScanLog(prev => [logEntry('WRONG_GYM', `Valid for ${pass.gymName}`), ...prev.slice(0, 49)]);
       return Alert.alert('Wrong Location 🔴', `Pass is valid for ${pass.gymName}, not your facility.`);
     }
+    if (pass.startsAt && new Date(pass.startsAt) > new Date()) {
+      setOwnerScanLog(prev => [logEntry('NOT_YET_ACTIVE', `Starts ${new Date(pass.startsAt).toLocaleDateString()}`), ...prev.slice(0, 49)]);
+      return Alert.alert('Not Yet Active 🟡', `This pass starts ${new Date(pass.startsAt).toLocaleDateString()}.`);
+    }
     if (pass.expiresAt && new Date(pass.expiresAt) < new Date()) {
       setOwnerScanLog(prev => [logEntry('EXPIRED', 'Pass expired'), ...prev.slice(0, 49)]);
       return Alert.alert('Pass Expired 🔴', 'This pass has expired.');
@@ -321,9 +374,11 @@ function IGymApp() {
       }
       const next = pass.remainingPunches - 1;
       await updatePass(pass.id, { remainingPunches: next });
+      recordCheckin(pass.userId, pass.gymId);
       setOwnerScanLog(prev => [logEntry('GRANTED', `${next} scans remaining`), ...prev.slice(0, 49)]);
       Alert.alert('Access Granted 🟢', `Checked in.\nScans remaining: ${next}`);
     } else {
+      recordCheckin(pass.userId, pass.gymId);
       setOwnerScanLog(prev => [logEntry('GRANTED', 'Time pass'), ...prev.slice(0, 49)]);
       Alert.alert('Access Granted 🟢', 'Valid time-based pass.');
     }
@@ -396,6 +451,38 @@ function IGymApp() {
     await persistOwner(updated);
   };
 
+  const handleAddPromotion = async () => {
+    if (!newPromoTitle.trim()) return Alert.alert('Incomplete', 'Give your promotion a title, e.g. "20% off day passes".');
+    const days = parseInt(newPromoDays) || 7;
+    const promoObj = {
+      id: uniqueId('promo_'),
+      title: newPromoTitle.trim(),
+      detail: newPromoDetail.trim(),
+      startDate: new Date().toISOString(),
+      endDate: new Date(Date.now() + days * 86400000).toISOString(),
+    };
+    const newPromotions = [promoObj, ...(infoForm.promotions||[])];
+    const updated = { ...currentOwner, ...infoForm, promotions: newPromotions };
+    setNewPromoTitle(''); setNewPromoDetail(''); setNewPromoDays('7');
+    await persistOwner(updated);
+    Alert.alert('Promotion live', `Members will see "${promoObj.title}" for the next ${days} days.`);
+
+    const interestedMembers = userDatabase.filter(u => (u.favorites||[]).includes(currentOwner.id) && u.pushToken);
+    if (interestedMembers.length > 0) {
+      sendPushNotifications(interestedMembers.map(u => ({
+        to: u.pushToken,
+        title: `🔥 New offer at ${updated.gymName}`,
+        body: promoObj.title,
+      })));
+    }
+  };
+
+  const handleRemovePromotion = async (id) => {
+    const newPromotions = (infoForm.promotions||[]).filter(p => p.id !== id);
+    const updated = { ...currentOwner, ...infoForm, promotions: newPromotions };
+    await persistOwner(updated);
+  };
+
   const handlePaymentSubmit = async () => {
     setIsProcessingPayment(true);
     try {
@@ -434,14 +521,15 @@ function IGymApp() {
         }
       }
 
+      const startDate = selectedPassStartDate || new Date();
       let expiresAt = null, remainingPunches = null;
       if (selectedPass.type === 'TIME') {
-        expiresAt = new Date(Date.now() + (parseInt(selectedPass.value)||1) * 86400000);
+        expiresAt = new Date(startDate.getTime() + (parseInt(selectedPass.value)||1) * 86400000);
       } else if (selectedPass.type === 'PUNCH') {
         remainingPunches = parseInt(selectedPass.value)||1;
-        expiresAt = new Date(Date.now() + 365 * 86400000);
+        expiresAt = new Date(startDate.getTime() + 365 * 86400000);
       } else {
-        expiresAt = new Date(Date.now() + 30 * 86400000);
+        expiresAt = new Date(startDate.getTime() + 30 * 86400000);
       }
       const platformFee = parseFloat((selectedPass.price * PLATFORM_FEE_RATE).toFixed(2));
       const gymReceives = parseFloat((selectedPass.price - platformFee).toFixed(2));
@@ -452,6 +540,7 @@ function IGymApp() {
         platformFee, gymReceives,
         type: selectedPass.type, value: selectedPass.value,
         purchasedAt: new Date().toISOString(),
+        startsAt: startDate.toISOString(),
         expiresAt: expiresAt?.toISOString() || null,
         remainingPunches, totalPunches: remainingPunches,
         stripePaymentId: clientSecret ? clientSecret.split('_secret_')[0] : 'demo',
@@ -474,6 +563,7 @@ function IGymApp() {
 
       setIsProcessingPayment(false);
       setCardDetails({ number:'', exp:'', cvv:'', name:'' });
+      setSelectedPassStartDate(new Date());
       setViewingQR(newPass);
       navigateTo('ACTIVE_PASS_VIEW');
     } catch (err) {
@@ -488,6 +578,7 @@ function IGymApp() {
     const idx = passes.findIndex(p => p.id === passId);
     if (idx === -1) return;
     const pass = passes[idx];
+    if (pass.startsAt && new Date(pass.startsAt) > new Date()) return Alert.alert('Not Yet Active', `This pass starts ${new Date(pass.startsAt).toLocaleDateString()}.`);
     if (pass.expiresAt && new Date(pass.expiresAt) < new Date()) return Alert.alert('Expired', 'This pass has expired.');
     let updatedPasses = [...passes];
     if (pass.remainingPunches != null) {
@@ -499,6 +590,7 @@ function IGymApp() {
     } else {
       Alert.alert('Scan Successful', 'Valid time-based pass verified.');
     }
+    recordCheckin(currentUser.id, pass.gymId);
     await persistUser({ ...currentUser, activePasses: updatedPasses });
     setViewingQR(updatedPasses[idx]);
   };
@@ -552,23 +644,49 @@ function IGymApp() {
       setCurrentUser(u); setCustomerTab('FIND_GYM');
       await AsyncStorage.setItem('@active_user', JSON.stringify(u));
       navigateTo('GYM_NETWORK');
+      registerForPushToken().then(pushToken => {
+        if (pushToken && pushToken !== user.pushToken) upsertUser({ ...u, pushToken });
+      });
     } else {
       Alert.alert('Access Denied', 'Invalid username or password.');
     }
   };
 
   const handleRegister = async () => {
-    const { firstName, lastName, username, password, email, address, city, state, zip } = regData;
+    const { firstName, lastName, username, password, email, address, city, state, zip, referredBy } = regData;
     if (!firstName||!lastName||!username||!password||!email||!address||!city||!zip||state==='Select State')
       return Alert.alert('Missing Info', 'All fields are required.');
+    const referralCode = username.trim().toUpperCase().slice(0, 6) + (Date.now() % 1000);
     const result = await dbRegisterUser({
       username: username.trim().toLowerCase(), password: password.trim(),
       email: email.trim(), firstName, lastName, phone: '',
       address, city, state, zip, favorites: [], activePasses: [],
+      referralCode, referredBy: referredBy.trim().toUpperCase() || null,
     });
     if (result.error) return Alert.alert('Error', result.error);
+    if (referredBy.trim()) redeemReferral(referredBy.trim().toUpperCase());
     setUserDatabase(await loadUsers());
     Alert.alert('Success', 'Account created!', [{ text: 'Login', onPress: () => navigateTo('SPLASH') }]);
+  };
+
+  const shareReferralCode = () => {
+    if (!currentUser?.referralCode) return;
+    Share.share({
+      message: `Come train with me on iGym! Enter my referral code ${currentUser.referralCode} when you sign up.`,
+    }).catch(() => {});
+  };
+
+  const notifyUserPush = (userId, title, body) => {
+    const target = userDatabase.find(u => u.id === userId);
+    if (!target?.pushToken) return;
+    sendPushNotifications([{ to: target.pushToken, title, body }]);
+  };
+
+  const shareOwnerReferralCode = () => {
+    if (!currentOwner?.referralCode) return;
+    Share.share({
+      message: `List your gym on iGym! Use referral code ${currentOwner.referralCode} when you register your business.`,
+    }).catch(() => {});
   };
 
   const saveCustomerProfile = async () => {
@@ -598,7 +716,7 @@ function IGymApp() {
   };
 
   const handleOwnerRegister = async () => {
-    const { gymName, ownerID, password, email, businessTaxID } = ownerRegData;
+    const { gymName, ownerID, password, email, businessTaxID, referredBy } = ownerRegData;
     if (!gymName||!ownerID||!password||!email||!businessTaxID)
       return Alert.alert('Missing Info', 'All business credentials required.');
     const newOwner = {
@@ -608,11 +726,12 @@ function IGymApp() {
       pricing:'', monthlyPrice:0, dayPassPrice:0, description:'', classes:[], equipment:[],
       passes:[], trainers:[], gymReviews:[], openHour:6, closeHour:22, hoursDisplay:'',
       lat: DEFAULT_LOCATION.latitude, lon: DEFAULT_LOCATION.longitude,
-      plan: 'free', featured: false,
+      plan: 'free', featured: false, promotions: [], matchImpressions: 0,
       referralCode: ownerID.trim().toUpperCase().slice(0,6) + (Date.now() % 1000),
       referralCount: 0, referralRevenue: 0, totalPassRevenue: 0, platformFeesPaid: 0, monthlyPassSales: 0,
     };
     await upsertGym(newOwner);
+    if (referredBy?.trim()) redeemGymReferral(referredBy.trim().toUpperCase());
     setOwnerDatabase(await loadGyms());
     Alert.alert('Created', 'Business account created!', [{ text: 'Login', onPress: () => navigateTo('OWNER_LOGIN') }]);
   };
@@ -878,36 +997,54 @@ function IGymApp() {
     ]);
   };
 
-  const handleAISearch = async () => {
-    if (!aiPrompt.trim()) return Alert.alert('Try it!', "Tell the AI what you're looking for.");
-    setIsAiLoading(true); setAiError(''); setAiSummary(''); setAiSuggestions([]);
-    setAiMatchResults({}); setExpandedMatchId(null);
+  const saveRecentSearch = (prompt) => {
+    if (!currentUser) return;
+    const current = currentUser.savedSearches || [];
+    const updated = [prompt, ...current.filter(s => s.toLowerCase() !== prompt.toLowerCase())].slice(0, 5);
+    persistUser({ ...currentUser, savedSearches: updated });
+  };
+
+  // isRefine=true carries the previous search's context into this one (via lastSearchTurn)
+  // instead of starting from a blank slate — powers the "Refine" chip taps below.
+  const runAISearch = async (promptText, isRefine = false) => {
+    const trimmed = (promptText ?? aiPrompt).trim();
+    if (!trimmed) return Alert.alert('Try it!', "Tell the AI what you're looking for.");
+    setAiPrompt(trimmed);
+    setIsAiLoading(true); setAiError('');
+    if (!isRefine) { setAiSummary(''); setAiSuggestions([]); setAiMatchResults({}); setExpandedMatchId(null); setLastSearchTurn(null); }
+    const previousTurn = isRefine ? lastSearchTurn : null;
+
+    const finish = (matchMap, summary, suggestions, usingReal) => {
+      setAiMatchResults(matchMap);
+      setAiSummary(summary);
+      setAiSuggestions(suggestions);
+      setUsingRealAI(usingReal);
+      setIsAiFiltering(true);
+      setLastSearchTurn({ prompt: trimmed, summary });
+      Object.keys(matchMap).forEach(gymId => incrementMatchImpressions(gymId));
+      saveRecentSearch(trimmed);
+    };
 
     if (apiKey) {
       try {
-        const result = await matchmakerSearch({ apiKey, prompt: aiPrompt.trim(), gyms: ownerDatabase });
+        const result = await matchmakerSearch({ apiKey, prompt: trimmed, gyms: ownerDatabase, previousTurn });
         const matchMap = {};
         (result.matches || []).forEach(m => { matchMap[m.gymId] = { score: m.score, reason: m.reason, highlights: m.highlights || [] }; });
-        setAiMatchResults(matchMap);
-        setAiSummary(result.summary || '');
-        setAiSuggestions(result.suggestions || []);
-        setUsingRealAI(true);
-        setIsAiFiltering(true);
+        finish(matchMap, result.summary || '', result.suggestions || [], true);
       } catch (err) {
         console.warn('Claude API failed, falling back:', err.message);
         setAiError(`AI unavailable. Showing local results.`);
-        setAiMatchResults(runLocalMatch(aiPrompt.trim(), ownerDatabase));
-        setUsingRealAI(false);
-        setIsAiFiltering(true);
+        finish(runLocalMatch(trimmed, ownerDatabase), '', [], false);
       }
     } else {
       await new Promise(r => setTimeout(r, 400));
-      setAiMatchResults(runLocalMatch(aiPrompt.trim(), ownerDatabase));
-      setUsingRealAI(false);
-      setIsAiFiltering(true);
+      finish(runLocalMatch(trimmed, ownerDatabase), '', [], false);
     }
     setIsAiLoading(false);
   };
+
+  const handleAISearch = () => runAISearch(aiPrompt, false);
+  const handleRefineSearch = (suggestion) => runAISearch(suggestion, true);
 
   const handleForgotPassword = () => {
     if (!loginUser) return Alert.alert('Who are you?', 'Enter your username first.');
@@ -989,6 +1126,7 @@ function IGymApp() {
                 <Text style={styles.sectionLabel}>Access Credentials</Text>
                 <TextInput style={styles.input} placeholder="Create Management ID" autoCapitalize="none" onChangeText={t => setOwnerRegData(p=>({...p,ownerID:t}))}/>
                 <TextInput style={styles.input} placeholder="Create Portal Password" secureTextEntry onChangeText={t => setOwnerRegData(p=>({...p,password:t}))}/>
+                <TextInput style={styles.input} placeholder="Referral Code (optional)" autoCapitalize="characters" value={ownerRegData.referredBy} onChangeText={t => setOwnerRegData(p=>({...p,referredBy:t}))}/>
                 <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#111'}]} onPress={handleOwnerRegister}><Text style={styles.btnText}>Submit Registration</Text></TouchableOpacity>
               </ScrollView>
             </KeyboardAvoidingView>
@@ -1015,6 +1153,7 @@ function IGymApp() {
                 </View>
                 <TextInput style={styles.input} placeholder="Create Username" autoCapitalize="none" onChangeText={t => setRegData(p=>({...p,username:t}))}/>
                 <TextInput style={styles.input} placeholder="Create Password" secureTextEntry onChangeText={t => setRegData(p=>({...p,password:t}))}/>
+                <TextInput style={styles.input} placeholder="Referral Code (optional)" autoCapitalize="characters" value={regData.referredBy} onChangeText={t => setRegData(p=>({...p,referredBy:t}))}/>
                 <TouchableOpacity style={styles.primaryBtn} onPress={handleRegister}><Text style={styles.btnText}>Create Account</Text></TouchableOpacity>
               </ScrollView>
             </KeyboardAvoidingView>
@@ -1134,6 +1273,17 @@ function IGymApp() {
                       </View>
                     </View>
 
+                    <Text style={styles.sectionLabel}>🎁 Invite Another Gym</Text>
+                    <TouchableOpacity style={[styles.infoBox,{backgroundColor:'#1C1C1E',borderWidth:0}]} onPress={shareOwnerReferralCode}>
+                      <View style={styles.rowJustify}>
+                        <View>
+                          <Text style={{fontSize:15, fontWeight:'800', color:'#FFF'}}>Your code: {currentOwner?.referralCode}</Text>
+                          <Text style={{fontSize:12, color:'#CCC', marginTop:3}}>{currentOwner?.referralCount||0} gyms joined via your code</Text>
+                        </View>
+                        <Text style={{fontSize:14, fontWeight:'700', color:'#FFF'}}>Share →</Text>
+                      </View>
+                    </TouchableOpacity>
+
                     <Text style={styles.sectionLabel}>⭐ Subscription & Placement</Text>
                     <TouchableOpacity style={[styles.infoBox, {borderLeftWidth:4, borderLeftColor: planTier.color}]} onPress={() => setShowSubscriptionModal(true)}>
                       <View style={styles.rowJustify}>
@@ -1157,6 +1307,7 @@ function IGymApp() {
                         { label:'Pass Tiers', value: analytics.passes?.length || 0, color:'#34C759', icon:'🎟️' },
                         { label:'Trainers', value: analytics.trainers?.length || 0, color:'#FF9500', icon:'👤' },
                         { label:'Classes', value: analytics.classes?.length || 0, color:'#5856D6', icon:'📋' },
+                        { label:'Search Views', value: currentOwner?.matchImpressions || 0, color:'#AF52DE', icon:'✨' },
                       ].map(stat => (
                         <View key={stat.label} style={{flex:1,minWidth:130,backgroundColor:stat.color+'15',padding:16,borderRadius:14,borderWidth:1,borderColor:stat.color+'30',alignItems:'center'}}>
                           <Text style={{fontSize:28}}>{stat.icon}</Text>
@@ -1204,12 +1355,14 @@ function IGymApp() {
                                   <TouchableOpacity style={{backgroundColor:'#34C759',paddingHorizontal:10,paddingVertical:5,borderRadius:8}} onPress={async () => {
                                     const updated = {...currentOwner, bookingRequests: currentOwner.bookingRequests.map(r => r.id===req.id ? {...r,status:'CONFIRMED'} : r)};
                                     await persistOwner(updated);
+                                    notifyUserPush(req.userId, 'Booking confirmed! 🎉', `${req.trainerName} confirmed your session at ${currentOwner.gymName}.`);
                                   }}>
                                     <Text style={{color:'#FFF',fontWeight:'700',fontSize:12}}>Confirm</Text>
                                   </TouchableOpacity>
                                   <TouchableOpacity style={{backgroundColor:'#FF3B30',paddingHorizontal:10,paddingVertical:5,borderRadius:8}} onPress={async () => {
                                     const updated = {...currentOwner, bookingRequests: currentOwner.bookingRequests.filter(r => r.id!==req.id)};
                                     await persistOwner(updated);
+                                    notifyUserPush(req.userId, 'Booking update', `${req.trainerName} at ${currentOwner.gymName} couldn't confirm your requested session.`);
                                   }}>
                                     <Text style={{color:'#FFF',fontWeight:'700',fontSize:12}}>Decline</Text>
                                   </TouchableOpacity>
@@ -1370,6 +1523,33 @@ function IGymApp() {
                       <TextInput style={styles.input} placeholder={newPassType==='TIME'?"Days Valid (e.g. 7)":"Scans Allowed (e.g. 10)"} value={newPassValue} onChangeText={setNewPassValue} keyboardType="numeric"/>
                       <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#5856D6'}]} onPress={handleAddPassToRepository}><Text style={styles.btnText}>+ Add to Menu</Text></TouchableOpacity>
                     </View>
+                  </View>
+
+                  <Text style={styles.sectionLabel}>🔥 Promotions</Text>
+                  <Text style={{color:'#888',fontSize:12,marginBottom:10,marginTop:-6}}>Time-boxed offers shown to members browsing your gym — a fresh reason to pick you over a competitor.</Text>
+                  <View style={styles.infoBox}>
+                    {(infoForm.promotions||[]).map(promo => {
+                      const active = getActivePromotion({ promotions: [promo] });
+                      return (
+                        <View key={promo.id} style={{marginBottom:10,paddingBottom:10,borderBottomWidth:1,borderBottomColor:'#EEE'}}>
+                          <View style={styles.rowJustify}>
+                            <View style={{flex:1,marginRight:10}}>
+                              <Text style={{fontWeight:'bold',fontSize:15}}>{promo.title}</Text>
+                              {!!promo.detail && <Text style={{color:'#555',fontSize:12,marginTop:2}}>{promo.detail}</Text>}
+                              <Text style={{color: active?'#34C759':'#999', fontSize:11, marginTop:4, fontWeight:'700'}}>
+                                {active ? `Live until ${new Date(promo.endDate).toLocaleDateString()}` : 'Expired'}
+                              </Text>
+                            </View>
+                            <TouchableOpacity onPress={() => handleRemovePromotion(promo.id)}><Text style={{color:'#FF3B30',fontSize:12}}>Remove</Text></TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+                    {(infoForm.promotions||[]).length === 0 && <Text style={{color:'#999',fontStyle:'italic',marginBottom:10}}>No active promotions.</Text>}
+                    <TextInput style={styles.input} placeholder='Title, e.g. "20% off day passes this week"' value={newPromoTitle} onChangeText={setNewPromoTitle}/>
+                    <TextInput style={styles.input} placeholder="Details (optional)" value={newPromoDetail} onChangeText={setNewPromoDetail}/>
+                    <TextInput style={styles.input} placeholder="Runs for how many days?" value={newPromoDays} onChangeText={setNewPromoDays} keyboardType="numeric"/>
+                    <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#FF9500'}]} onPress={handleAddPromotion}><Text style={styles.btnText}>+ Launch Promotion</Text></TouchableOpacity>
                   </View>
 
                   <Text style={styles.sectionLabel}>Classes Offered</Text>
@@ -1862,10 +2042,23 @@ function IGymApp() {
 
                       {memberIsPremium && isAiFiltering && aiSuggestions.length > 0 && (
                         <View style={{marginTop:10}}>
-                          <Text style={{fontSize:11,color:'#888',fontWeight:'600',marginBottom:6,textTransform:'uppercase'}}>Try asking:</Text>
+                          <Text style={{fontSize:11,color:'#888',fontWeight:'600',marginBottom:6,textTransform:'uppercase'}}>🔄 Refine:</Text>
                           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                             {aiSuggestions.map((s, i) => (
-                              <TouchableOpacity key={i} style={styles.aiSuggestionChip} onPress={() => setAiPrompt(s)}>
+                              <TouchableOpacity key={i} style={styles.aiSuggestionChip} onPress={() => handleRefineSearch(s)} disabled={isAiLoading}>
+                                <Text style={styles.aiSuggestionText}>{s}</Text>
+                              </TouchableOpacity>
+                            ))}
+                          </ScrollView>
+                        </View>
+                      )}
+
+                      {memberIsPremium && !isAiFiltering && (currentUser?.savedSearches||[]).length > 0 && (
+                        <View style={{marginTop:10}}>
+                          <Text style={{fontSize:11,color:'#888',fontWeight:'600',marginBottom:6,textTransform:'uppercase'}}>Recent searches:</Text>
+                          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                            {currentUser.savedSearches.map((s, i) => (
+                              <TouchableOpacity key={i} style={styles.aiSuggestionChip} onPress={() => runAISearch(s, false)} disabled={isAiLoading}>
                                 <Text style={styles.aiSuggestionText}>{s}</Text>
                               </TouchableOpacity>
                             ))}
@@ -1874,7 +2067,7 @@ function IGymApp() {
                       )}
 
                       {memberIsPremium && isAiFiltering && (
-                        <TouchableOpacity style={styles.clearAiBtn} onPress={() => { setIsAiFiltering(false); setAiPrompt(''); setAiMatchResults({}); setAiSummary(''); setAiSuggestions([]); setAiError(''); setUsingRealAI(false); }}>
+                        <TouchableOpacity style={styles.clearAiBtn} onPress={() => { setIsAiFiltering(false); setAiPrompt(''); setAiMatchResults({}); setAiSummary(''); setAiSuggestions([]); setAiError(''); setUsingRealAI(false); setLastSearchTurn(null); }}>
                           <Text style={styles.clearAiText}>✕ Clear AI Results</Text>
                         </TouchableOpacity>
                       )}
@@ -1959,6 +2152,11 @@ function IGymApp() {
                                 </View>
                               </View>
                               <Text style={[styles.itemSub,{marginTop:2}]}>{item.location}</Text>
+                              {getActivePromotion(item) && (
+                                <View style={{backgroundColor:'#FFF3E0',paddingHorizontal:10,paddingVertical:6,borderRadius:8,marginTop:8}}>
+                                  <Text style={{color:'#E65100',fontWeight:'700',fontSize:12}}>🔥 {getActivePromotion(item).title}</Text>
+                                </View>
+                              )}
                               <View style={[styles.row,{marginTop:8,alignItems:'center',flexWrap:'wrap',gap:6}]}>
                                 {openStatus !== null && (
                                   <View style={{backgroundColor:openStatus?'#E8F8EF':'#FFE5E5',paddingHorizontal:8,paddingVertical:3,borderRadius:6}}>
@@ -2133,6 +2331,40 @@ function IGymApp() {
 
               {customerTab === 'PROFILE' && (
                 <ScrollView contentContainerStyle={{paddingHorizontal:25}}>
+                  {memberCheckins.length > 0 && (() => {
+                    const stats = computeCheckinStats(memberCheckins);
+                    return (
+                      <View style={[styles.infoBox,{backgroundColor:'#F0F4FF',borderColor:'#C7D6FF',borderWidth:1,marginBottom:15}]}>
+                        <View style={styles.rowJustify}>
+                          <Text style={{fontSize:16,fontWeight:'800',color:'#3A4CA8'}}>🔥 {stats.currentStreak}-day streak</Text>
+                          <Text style={{fontSize:14,fontWeight:'700',color:'#3A4CA8'}}>{stats.totalVisits} visits</Text>
+                        </View>
+                        {stats.badges.length > 0 && (
+                          <View style={{flexDirection:'row',flexWrap:'wrap',gap:6,marginTop:10}}>
+                            {stats.badges.map(b => (
+                              <View key={b.threshold} style={{backgroundColor:'#FFF',paddingHorizontal:10,paddingVertical:4,borderRadius:12,borderWidth:1,borderColor:'#C7D6FF'}}>
+                                <Text style={{fontSize:11,fontWeight:'700',color:'#3A4CA8'}}>🏅 {b.label}</Text>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })()}
+                  {currentUser?.referralCode && (
+                    <TouchableOpacity style={[styles.infoBox,{backgroundColor:'#1C1C1E',borderWidth:0,marginBottom:15}]} onPress={shareReferralCode}>
+                      <View style={styles.rowJustify}>
+                        <View>
+                          <Text style={{fontSize:16, fontWeight:'800', color:'#FFF'}}>🎁 Invite a friend</Text>
+                          <Text style={{fontSize:12, color:'#CCC', marginTop:3}}>
+                            Your code: {currentUser.referralCode}
+                            {currentUser.referralCount > 0 ? `  •  ${currentUser.referralCount} joined so far` : ''}
+                          </Text>
+                        </View>
+                        <Text style={{fontSize:14, fontWeight:'700', color:'#FFF'}}>Share →</Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
                   <TouchableOpacity
                     style={[styles.infoBox, memberIsPremium ? {backgroundColor:'#FFF9EE', borderColor:'#FF9500', borderWidth:1.5} : {backgroundColor:'#F0F0F0', borderColor:'#DDD', borderWidth:1}]}
                     onPress={() => setShowPremiumModal(true)}
@@ -2244,6 +2476,13 @@ function IGymApp() {
 
               <Text style={styles.header}>{selectedGym?.gymName}</Text>
               <Text style={styles.subHeader}>{selectedGym?.location}</Text>
+
+              {getActivePromotion(selectedGym) && (
+                <View style={{backgroundColor:'#FFF3E0',padding:14,borderRadius:12,marginBottom:15}}>
+                  <Text style={{color:'#E65100',fontWeight:'800',fontSize:15}}>🔥 {getActivePromotion(selectedGym).title}</Text>
+                  {!!getActivePromotion(selectedGym).detail && <Text style={{color:'#BF6000',fontSize:13,marginTop:4}}>{getActivePromotion(selectedGym).detail}</Text>}
+                </View>
+              )}
 
               <View style={[styles.row,{flexWrap:'wrap',gap:8,marginBottom:15}]}>
                 {gymOpenStatus !== null && (
@@ -2390,7 +2629,16 @@ function IGymApp() {
                     <Text style={{fontSize:16,color:'#333'}}>{selectedPass?.label}</Text>
                     <Text style={{fontSize:18,fontWeight:'bold',color:'#34C759'}}>${selectedPass?.price.toFixed(2)}</Text>
                   </View>
-                  <Text style={{marginTop:5,fontSize:12,color:'#888'}}>{selectedPass?.type==='TIME'?`Valid ${selectedPass.value} day(s) from purchase`:`${selectedPass.value} gym entry scans included`}</Text>
+                  <Text style={{marginTop:5,fontSize:12,color:'#888'}}>{selectedPass?.type==='TIME'?`Valid ${selectedPass.value} day(s) from start date`:`${selectedPass.value} gym entry scans included`}</Text>
+                  <TouchableOpacity
+                    style={[styles.rowJustify,{marginTop:12,paddingTop:12,borderTopWidth:1,borderTopColor:'#DDD'}]}
+                    onPress={() => { setDatePickerField('passStart'); setShowDatePicker(true); }}
+                  >
+                    <Text style={{color:'#666',fontSize:13}}>Starts on</Text>
+                    <Text style={{color:'#007AFF',fontSize:13,fontWeight:'700'}}>
+                      {selectedPassStartDate.toDateString() === new Date().toDateString() ? 'Today (change)' : `${selectedPassStartDate.toLocaleDateString()} (change)`}
+                    </Text>
+                  </TouchableOpacity>
                   <View style={{marginTop:14,paddingTop:14,borderTopWidth:1,borderTopColor:'#DDD'}}>
                     <View style={[styles.rowJustify,{marginBottom:6}]}>
                       <Text style={{color:'#666',fontSize:13}}>Pass price</Text>
@@ -2562,7 +2810,13 @@ function IGymApp() {
       </Animated.View>
 
       {showDatePicker && Platform.OS==='android' && (
-        <DateTimePicker value={new Date()} mode="date" display="default" onChange={(e,d) => { setShowDatePicker(false); if(d) setEditEquipData(p=>({...p,[datePickerField]:d.toLocaleDateString()})); }}/>
+        <DateTimePicker
+          value={datePickerField==='passStart' ? selectedPassStartDate : new Date()}
+          mode="date"
+          display="default"
+          minimumDate={datePickerField==='passStart' ? new Date() : undefined}
+          onChange={(e,d) => { setShowDatePicker(false); if(d) { if (datePickerField==='passStart') setSelectedPassStartDate(d); else setEditEquipData(p=>({...p,[datePickerField]:d.toLocaleDateString()})); } }}
+        />
       )}
       <Modal visible={showDatePicker && Platform.OS==='ios'} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -2571,7 +2825,13 @@ function IGymApp() {
               <Text style={styles.modalTitle}>Select Date</Text>
               <TouchableOpacity onPress={() => setShowDatePicker(false)}><Text style={styles.backLink}>Done</Text></TouchableOpacity>
             </View>
-            <DateTimePicker value={new Date()} mode="date" display="inline" onChange={(e,d) => { if(d) setEditEquipData(p=>({...p,[datePickerField]:d.toLocaleDateString()})); }}/>
+            <DateTimePicker
+              value={datePickerField==='passStart' ? selectedPassStartDate : new Date()}
+              mode="date"
+              display="inline"
+              minimumDate={datePickerField==='passStart' ? new Date() : undefined}
+              onChange={(e,d) => { if(d) { if (datePickerField==='passStart') setSelectedPassStartDate(d); else setEditEquipData(p=>({...p,[datePickerField]:d.toLocaleDateString()})); } }}
+            />
           </View>
         </View>
       </Modal>
