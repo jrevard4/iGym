@@ -1,0 +1,13 @@
+{
+  "name": "iGym — Find the right gym for you",
+  "short_name": "iGym",
+  "description": "Browse gyms near you, compare equipment and classes, buy day-passes, and check in with a QR code.",
+  "start_url": "/gyms",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#F7F7F8",
+  "theme_color": "#007AFF",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

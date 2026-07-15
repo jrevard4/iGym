@@ -21,7 +21,7 @@ function todayISODate() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function buildReturnUrl(gym, pass, startsAt) {
+function buildReturnUrl(gym, pass, startsAt, referralCode) {
   const params = new URLSearchParams({
     gymId: gym.id,
     passId: pass.id,
@@ -31,6 +31,7 @@ function buildReturnUrl(gym, pass, startsAt) {
     value: String(pass.value),
     startsAt,
   });
+  if (referralCode) params.set('ref', referralCode);
   return `${window.location.origin}/checkout/return?${params.toString()}`;
 }
 
@@ -54,6 +55,7 @@ function CheckoutPageInner() {
     type: searchParams.get('type') || 'TIME',
     value: searchParams.get('value') || '1',
   }), [searchParams]);
+  const referralCode = searchParams.get('ref');
 
   const [session, setUserSession] = useState(undefined); // undefined = still checking
   const [gym, setGym] = useState(null);
@@ -119,7 +121,7 @@ function CheckoutPageInner() {
     setFinalizing(true);
     setSetupError('');
     try {
-      const newPass = await finalizePassPurchase({ gym, pass, userId: session.id, stripePaymentId: 'demo', startsAt });
+      const newPass = await finalizePassPurchase({ gym, pass, userId: session.id, stripePaymentId: 'demo', startsAt, referralCode });
       setPurchasedPass(newPass);
     } catch (err) {
       setSetupError(err.message || 'Something went wrong.');
@@ -184,12 +186,12 @@ function CheckoutPageInner() {
       <h1 className="text-3xl font-black mt-4 mb-1">Checkout</h1>
       <p className="text-gray-600 mb-6">Complete your purchase to get instant access.</p>
 
-      <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-6">
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 mb-6">
         <div className="flex justify-between items-start mb-2">
           <div>
             <div className="font-bold">🎟️ {pass.label}</div>
             <div className="text-xs text-gray-500 mt-0.5">
-              {pass.type === 'TIME' ? `Valid ${pass.value} day(s)` : `${pass.value} scans included`}
+              {pass.type === 'PUNCH' ? `${pass.value} scans included` : `Valid ${pass.value} day(s)`}
               {startsAt !== todayISODate() && ` — starting ${parseLocalDate(startsAt).toLocaleDateString()}`}
             </div>
           </div>
@@ -236,12 +238,16 @@ function CheckoutPageInner() {
           </button>
         </div>
       ) : clientSecret ? (
-        <Elements stripe={getStripe()} options={{ clientSecret }}>
+        // paymentMethodOrder surfaces Apple Pay / Google Pay as buttons at the
+        // top of PaymentElement when the browser/device is eligible and the
+        // Stripe account has them enabled — no separate integration needed.
+        <Elements stripe={getStripe()} options={{ clientSecret, paymentMethodOrder: ['apple_pay', 'google_pay', 'card'] }}>
           <CheckoutForm
             gym={gym}
             pass={pass}
             userId={session.id}
             startsAt={startsAt}
+            referralCode={referralCode}
             onSuccess={setPurchasedPass}
             onError={setSetupError}
           />
@@ -253,7 +259,7 @@ function CheckoutPageInner() {
   );
 }
 
-function CheckoutForm({ gym, pass, userId, startsAt, onSuccess, onError }) {
+function CheckoutForm({ gym, pass, userId, startsAt, referralCode, onSuccess, onError }) {
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
@@ -268,7 +274,7 @@ function CheckoutForm({ gym, pass, userId, startsAt, onSuccess, onError }) {
     const { error: confirmError, paymentIntent } = await stripe.confirmPayment({
       elements,
       redirect: 'if_required',
-      confirmParams: { return_url: buildReturnUrl(gym, pass, startsAt) },
+      confirmParams: { return_url: buildReturnUrl(gym, pass, startsAt, referralCode) },
     });
 
     if (confirmError) {
@@ -279,7 +285,7 @@ function CheckoutForm({ gym, pass, userId, startsAt, onSuccess, onError }) {
 
     if (paymentIntent?.status === 'succeeded') {
       try {
-        const newPass = await finalizePassPurchase({ gym, pass, userId, stripePaymentId: paymentIntent.id, startsAt });
+        const newPass = await finalizePassPurchase({ gym, pass, userId, stripePaymentId: paymentIntent.id, startsAt, referralCode });
         onSuccess(newPass);
       } catch (err) {
         onError(err.message || 'Payment succeeded but saving the pass failed. Contact support.');

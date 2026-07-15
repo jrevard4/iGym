@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, setSession } from '@/lib/auth';
-import { loadUserPasses, loadUserCheckins } from '../../../lib/supabase';
+import { loadUserPasses, loadUserCheckins, getUserById, upsertUser } from '../../../lib/supabase';
 import { computeCheckinStats } from '../../../lib/helpers';
 
 export default function WalletPage() {
@@ -22,16 +22,21 @@ export default function WalletPage() {
     }
     setUser(session);
 
-    // Refresh passes from DB so any pass purchased on mobile shows up here too
+    // Refresh passes from DB so any pass purchased on mobile shows up here too,
+    // and re-fetch the user row so referralCredit reflects purchases other
+    // people made using this member's shared link (the cached session won't).
     (async () => {
       try {
-        const [fresh, checkinRows] = await Promise.all([
+        const [fresh, checkinRows, freshUser] = await Promise.all([
           loadUserPasses(session.id),
           loadUserCheckins(session.id),
+          getUserById(session.id),
         ]);
         setPasses(fresh);
         setCheckins(checkinRows);
-        setSession({ ...session, activePasses: fresh });
+        const merged = { ...session, ...(freshUser || {}), activePasses: fresh };
+        setUser(merged);
+        setSession(merged);
       } catch {
         setPasses(session.activePasses || []);
       } finally {
@@ -51,13 +56,17 @@ export default function WalletPage() {
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
       <h1 className="text-4xl font-black mb-2">Your Wallet</h1>
-      <p className="text-gray-600 mb-8">
+      <p className="text-gray-600 dark:text-gray-400 mb-8">
         Active passes for {user.firstName || user.username}. Open the iGym mobile app to scan in at the front desk.
       </p>
 
       {checkins.length > 0 && <StreakCard checkins={checkins} />}
 
       {user.referralCode && <ReferralCard user={user} />}
+
+      {(user.savedWorkouts || []).length > 0 && (
+        <WorkoutHistoryCard user={user} onChange={(updated) => setUser(updated)} />
+      )}
 
       {passes.length === 0 ? (
         <div className="text-center py-20 border-2 border-dashed border-gray-200 rounded-2xl">
@@ -81,13 +90,13 @@ export default function WalletPage() {
               <li
                 key={pass.id}
                 className={
-                  'bg-white border-2 rounded-2xl p-5 transition ' +
-                  (expired ? 'opacity-60 border-gray-200' : upcoming ? 'border-amber-300' : 'border-gray-900')
+                  'bg-white dark:bg-gray-900 border-2 rounded-2xl p-5 transition ' +
+                  (expired ? 'opacity-60 border-gray-200 dark:border-gray-800' : upcoming ? 'border-amber-300 dark:border-amber-700' : 'border-gray-900 dark:border-gray-600')
                 }
               >
                 <div className="flex justify-between items-start mb-3">
                   <div>
-                    <div className="text-xl font-bold">{pass.gymName}</div>
+                    <div className="text-xl font-bold text-gray-900 dark:text-gray-100">{pass.gymName}</div>
                     <div className="text-accent font-semibold">{pass.label}</div>
                   </div>
                   <span
@@ -180,6 +189,11 @@ function ReferralCard({ user }) {
           Your code: <span className="font-mono font-bold text-white">{user.referralCode}</span>
           {user.referralCount > 0 && <span className="ml-2 text-gray-400">· {user.referralCount} joined so far</span>}
         </div>
+        {user.referralCredit > 0 && (
+          <div className="text-sm text-success font-semibold mt-1">
+            💰 ${Number(user.referralCredit).toFixed(2)} earned from referrals
+          </div>
+        )}
       </div>
       <button
         onClick={share}
@@ -187,6 +201,58 @@ function ReferralCard({ user }) {
       >
         {copied ? 'Link copied!' : 'Share iGym'}
       </button>
+    </div>
+  );
+}
+
+// ─── AI workout history ────────────────────────────────────────────────────
+function WorkoutHistoryCard({ user, onChange }) {
+  const [expandedId, setExpandedId] = useState(null);
+  const workouts = user.savedWorkouts || [];
+
+  const remove = async (id) => {
+    const updated = { ...user, savedWorkouts: workouts.filter((w) => w.id !== id) };
+    setSession(updated);
+    onChange(updated);
+    await upsertUser(updated);
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 mb-8">
+      <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">✨ Recent AI Workouts</h2>
+      <ul className="space-y-2">
+        {workouts.map((w) => {
+          const expanded = expandedId === w.id;
+          return (
+            <li key={w.id} className="border border-gray-100 dark:border-gray-800 rounded-xl overflow-hidden">
+              <button
+                onClick={() => setExpandedId(expanded ? null : w.id)}
+                className="w-full flex justify-between items-center gap-2 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-800 transition"
+              >
+                <div>
+                  <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{w.title}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-500 mt-0.5">
+                    {w.gymName} · {(w.muscleGroups || []).join(', ') || 'Full body'} · {new Date(w.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+                <span className="text-gray-400 dark:text-gray-600 text-xs shrink-0">{expanded ? '▲' : '▼'}</span>
+              </button>
+              {expanded && (
+                <div className="px-4 pb-4">
+                  <ul className="space-y-2 mb-2">
+                    {(w.exercises || []).map((ex, i) => (
+                      <li key={i} className="text-xs text-gray-700 dark:text-gray-300">
+                        <span className="font-semibold">{i + 1}. {ex.name}</span> — {ex.sets} × {ex.reps} ({ex.equipment})
+                      </li>
+                    ))}
+                  </ul>
+                  <button onClick={() => remove(w.id)} className="text-danger text-xs font-semibold hover:underline">Remove</button>
+                </div>
+              )}
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }

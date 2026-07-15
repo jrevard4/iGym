@@ -54,12 +54,12 @@ function RegisterForm() {
     }
   };
 
-  const cls = 'w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none';
+  const cls = 'w-full px-4 py-3 border border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 rounded-lg focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none';
 
   return (
     <div className="max-w-lg mx-auto px-6 py-12">
       <h1 className="text-4xl font-black mb-2">Create your account</h1>
-      <p className="text-gray-600 mb-8">Buy day-passes at any iGym partner gym.</p>
+      <p className="text-gray-600 dark:text-gray-400 mb-8">Buy day-passes at any iGym partner gym.</p>
 
       <form onSubmit={submit} className="space-y-3">
         <div className="grid grid-cols-2 gap-3">
@@ -77,7 +77,7 @@ function RegisterForm() {
           <input className={cls} placeholder="Zip" value={form.zip} onChange={update('zip')} />
         </div>
 
-        <div className="pt-2 border-t border-gray-200">
+        <div className="pt-2 border-t border-gray-200 dark:border-gray-800">
           <input className={cls + ' mt-3'} placeholder="Choose a username" value={form.username} onChange={update('username')} autoComplete="username" />
           <input className={cls + ' mt-3'} type="password" placeholder="Choose a password" value={form.password} onChange={update('password')} autoComplete="new-password" />
         </div>
@@ -102,7 +102,7 @@ function RegisterForm() {
         </button>
       </form>
 
-      <p className="mt-6 text-center text-sm text-gray-600">
+      <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
         Already have one?{' '}
         <Link href="/login" className="text-brand hover:underline font-semibold">Sign in</Link>
       </p>

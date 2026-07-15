@@ -1,5 +1,17 @@
 import './globals.css';
 import SiteChrome from '@/components/SiteChrome';
+import PWARegister from '@/components/PWARegister';
+import { PreferencesProvider } from '@/lib/PreferencesContext';
+
+const THEME_INIT_SCRIPT = `
+try {
+  var t = localStorage.getItem('igym_theme');
+  var dark = t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  if (dark) document.documentElement.classList.add('dark');
+  var lang = localStorage.getItem('igym_lang');
+  if (lang) document.documentElement.lang = lang;
+} catch (e) {}
+`;
 
 const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'http://localhost:3000';
 
@@ -29,8 +41,18 @@ export const metadata = {
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body className="min-h-screen flex flex-col">
-        <SiteChrome>{children}</SiteChrome>
+      <head>
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#007AFF" />
+        {/* Applies the saved/system theme before first paint to avoid a light-mode flash */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
+      <body className="min-h-screen flex flex-col bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors">
+        <a href="#main-content" className="skip-link">Skip to content</a>
+        <PreferencesProvider>
+          <SiteChrome>{children}</SiteChrome>
+        </PreferencesProvider>
+        <PWARegister />
       </body>
     </html>
   );

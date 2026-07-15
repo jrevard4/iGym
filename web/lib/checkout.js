@@ -2,7 +2,7 @@
 // Mirrors the completion logic in ../../App.js `handlePaymentSubmit`, so the
 // pass shape and revenue accounting stay identical between mobile and web.
 
-import { savePass, recordPassSale } from '../../lib/supabase';
+import { savePass, recordPassSale, getUserByReferralCode, recordReferralReward } from '../../lib/supabase';
 import { PLATFORM_FEE_RATE } from '../../lib/constants';
 
 // A bare 'YYYY-MM-DD' (from <input type="date">) is parsed by `new Date()` as
@@ -16,12 +16,12 @@ export function parseLocalDate(value) {
   return new Date(value);
 }
 
-export async function finalizePassPurchase({ gym, pass, userId, stripePaymentId, startsAt }) {
+export async function finalizePassPurchase({ gym, pass, userId, stripePaymentId, startsAt, referralCode }) {
   const startDate = parseLocalDate(startsAt);
   let expiresAt = null;
   let remainingPunches = null;
 
-  if (pass.type === 'TIME') {
+  if (pass.type === 'TIME' || pass.type === 'MEMBERSHIP') {
     expiresAt = new Date(startDate.getTime() + (parseInt(pass.value) || 1) * 86400000);
   } else if (pass.type === 'PUNCH') {
     remainingPunches = parseInt(pass.value) || 1;
@@ -53,6 +53,18 @@ export async function finalizePassPurchase({ gym, pass, userId, stripePaymentId,
 
   await savePass(newPass, userId);
   await recordPassSale(gym.id, gymReceives, platformFee);
+
+  if (referralCode && gym.referralFeeRate > 0) {
+    try {
+      const referrer = await getUserByReferralCode(referralCode);
+      if (referrer && referrer.id !== userId) {
+        const referralFee = parseFloat((pass.price * gym.referralFeeRate).toFixed(2));
+        await recordReferralReward(referrer.id, referralFee, gym.id);
+      }
+    } catch (err) {
+      console.warn('[finalizePassPurchase] referral reward failed:', err.message);
+    }
+  }
 
   return newPass;
 }

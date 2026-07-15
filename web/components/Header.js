@@ -3,9 +3,13 @@
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { getSession, clearSession } from '@/lib/auth';
+import { usePreferences, useT } from '@/lib/PreferencesContext';
+import { LANGUAGES } from '../../lib/i18n';
 
 export default function Header() {
   const [user, setUser] = useState(null);
+  const { theme, toggleTheme, lang, setLang } = usePreferences();
+  const t = useT();
 
   // Pick up session on mount + when other tabs change it
   useEffect(() => {
@@ -22,35 +26,51 @@ export default function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-white/90 backdrop-blur border-b border-gray-200">
+    <header className="sticky top-0 z-40 bg-white/90 dark:bg-gray-900/90 backdrop-blur border-b border-gray-200 dark:border-gray-800">
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
         <Link href="/" className="text-2xl font-black tracking-tight">
           <span className="text-brand">i</span>Gym
         </Link>
-        <nav className="hidden sm:flex items-center gap-6 text-sm font-medium text-gray-700">
-          <Link href="/gyms" className="hover:text-brand">Find a Gym</Link>
-          {user && <Link href="/wallet" className="hover:text-brand">Wallet</Link>}
+        <nav className="hidden sm:flex items-center gap-6 text-sm font-medium text-gray-700 dark:text-gray-300">
+          <Link href="/gyms" className="hover:text-brand">{t('findGym')}</Link>
+          {user && <Link href="/wallet" className="hover:text-brand">{t('wallet')}</Link>}
         </nav>
         <div className="flex items-center gap-3">
+          <button
+            onClick={toggleTheme}
+            aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="text-lg text-gray-500 dark:text-gray-400 hover:text-brand transition w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+          >
+            {theme === 'dark' ? '☀️' : '🌙'}
+          </button>
+          <select
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+            aria-label="Choose language"
+            className="text-sm bg-transparent text-gray-500 dark:text-gray-400 hover:text-brand transition outline-none cursor-pointer"
+          >
+            {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.code.toUpperCase()}</option>)}
+          </select>
           {user ? (
             <>
-              <span className="hidden sm:inline text-sm text-gray-600">
-                Hi, <span className="font-semibold text-gray-900">{user.firstName || user.username}</span>
+              <span className="hidden sm:inline text-sm text-gray-600 dark:text-gray-400">
+                Hi, <span className="font-semibold text-gray-900 dark:text-gray-100">{user.firstName || user.username}</span>
               </span>
               <button
                 onClick={onLogout}
-                className="text-sm font-medium text-gray-600 hover:text-danger transition"
+                className="text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-danger transition"
               >
-                Sign out
+                {t('logout')}
               </button>
             </>
           ) : (
             <>
               <Link
                 href="/login"
-                className="text-sm font-medium text-gray-700 hover:text-brand"
+                className="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-brand"
               >
-                Login
+                {t('login')}
               </Link>
               <Link
                 href="/register"

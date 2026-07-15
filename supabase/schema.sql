@@ -24,8 +24,10 @@ create table if not exists users (
   "referralCode" text unique,
   "referredBy" text,
   "referralCount" int default 0,
+  "referralCredit" numeric default 0,   -- earned from referred purchases (display-only, not auto-redeemed)
   "pushToken" text,
   "savedSearches" jsonb default '[]'::jsonb,
+  "savedWorkouts" jsonb default '[]'::jsonb,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -60,12 +62,15 @@ create table if not exists gyms (
   featured boolean default false,
   "referralCode" text,
   "referralCount" int default 0,
-  "referralRevenue" numeric default 0,
+  "referralRevenue" numeric default 0,  -- total paid out to customers who referred a paying buyer
+  "referralFeeRate" numeric default 0,  -- 0-1 fraction of a referred purchase's price paid to the referrer; 0 = off
   "totalPassRevenue" numeric default 0,
   "platformFeesPaid" numeric default 0,
   "monthlyPassSales" int default 0,
   promotions jsonb default '[]'::jsonb,
   "matchImpressions" int default 0,
+  amenities jsonb default '[]'::jsonb,
+  branding jsonb default '{}'::jsonb,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -150,6 +155,22 @@ begin
 end;
 $$ language plpgsql security definer;
 
+-- Atomically credits a referrer when someone they referred buys a pass or
+-- membership: bumps the referrer's spendable-looking (but display-only,
+-- never auto-redeemed) credit balance, and the gym's cumulative payout total.
+create or replace function record_referral_reward(
+  p_referrer_user_id text,
+  p_amount numeric,
+  p_gym_id text
+) returns void as $$
+begin
+  update users set "referralCredit" = coalesce("referralCredit", 0) + p_amount
+  where id = p_referrer_user_id;
+  update gyms set "referralRevenue" = coalesce("referralRevenue", 0) + p_amount
+  where id = p_gym_id;
+end;
+$$ language plpgsql security definer;
+
 -- Atomically bumps a gym's search-interest counter whenever it appears in
 -- AI matchmaker or local-match results.
 create or replace function increment_match_impressions(
@@ -160,6 +181,19 @@ begin
   where id = p_gym_id;
 end;
 $$ language plpgsql security definer;
+
+-- ─── STORAGE (equipment photos) ────────────────────────────────────
+-- Public bucket for owner-uploaded equipment photos + muscle-diagram images.
+-- Buckets/policies are just rows in storage.buckets/storage.objects, so this
+-- stays paste-and-run like the rest of this file — no dashboard clicking needed.
+insert into storage.buckets (id, name, public)
+values ('equipment-photos', 'equipment-photos', true)
+on conflict (id) do nothing;
+
+create policy "Public read equipment photos" on storage.objects
+  for select using (bucket_id = 'equipment-photos');
+create policy "Public upload equipment photos" on storage.objects
+  for insert with check (bucket_id = 'equipment-photos');
 
 -- ─── ROW LEVEL SECURITY ────────────────────────────────────────────
 -- For an MVP using a single ANON key, RLS is left disabled — the anon key
@@ -199,3 +233,24 @@ $$ language plpgsql security definer;
 --
 -- Phase 3 additions:
 -- alter table passes add column if not exists "startsAt" timestamptz;
+--
+-- Phase 4 additions (equipment photo storage — see STORAGE section above):
+-- insert into storage.buckets (id, name, public)
+-- values ('equipment-photos', 'equipment-photos', true)
+-- on conflict (id) do nothing;
+-- create policy "Public read equipment photos" on storage.objects
+--   for select using (bucket_id = 'equipment-photos');
+-- create policy "Public upload equipment photos" on storage.objects
+--   for insert with check (bucket_id = 'equipment-photos');
+--
+-- Phase 5 additions (amenity filters + gym branding sync):
+-- alter table gyms add column if not exists amenities jsonb default '[]'::jsonb;
+-- alter table gyms add column if not exists branding jsonb default '{}'::jsonb;
+--
+-- Phase 6 additions (purchase-linked referral fee):
+-- alter table users add column if not exists "referralCredit" numeric default 0;
+-- alter table gyms  add column if not exists "referralFeeRate" numeric default 0;
+-- (record_referral_reward function is created unconditionally above via `create or replace`)
+--
+-- Phase 7 additions (AI workout history):
+-- alter table users add column if not exists "savedWorkouts" jsonb default '[]'::jsonb;

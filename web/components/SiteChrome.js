@@ -11,12 +11,12 @@ export default function SiteChrome({ children }) {
   const pathname = usePathname();
   const isOwnerRoute = pathname?.startsWith('/owner');
 
-  if (isOwnerRoute) return <main className="flex-1">{children}</main>;
+  if (isOwnerRoute) return <main id="main-content" className="flex-1">{children}</main>;
 
   return (
     <>
       <Header />
-      <main className="flex-1">{children}</main>
+      <main id="main-content" className="flex-1">{children}</main>
       <Footer />
     </>
   );

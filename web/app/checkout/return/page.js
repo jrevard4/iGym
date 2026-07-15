@@ -70,6 +70,7 @@ function CheckoutReturnPageInner() {
           userId: session.id,
           stripePaymentId: paymentIntent.id,
           startsAt: searchParams.get('startsAt'),
+          referralCode: searchParams.get('ref'),
         });
         setPurchasedPass(newPass);
         setStatus('success');

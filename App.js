@@ -4,12 +4,12 @@
 //   lib/*           → all data, helpers, AI, and DB
 //   components/*    → cross-cutting components
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   SafeAreaView, TextInput, ScrollView, ImageBackground, StatusBar,
   KeyboardAvoidingView, Platform, Modal, Image, Alert, ActivityIndicator,
-  Switch, Linking, Animated, Easing, RefreshControl, Share,
+  Switch, Linking, Animated, Easing, RefreshControl, Share, useColorScheme,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,6 +25,7 @@ import env from './lib/env';
 import {
   CLASS_TYPES, EQUIP_CATEGORIES, PLAN_TIERS, US_STATES, PRESET_PASSES,
   DEFAULT_LOCATION, PLATFORM_FEE_RATE, MEMBER_PREMIUM_PRICE, BRAND_WEBSITES,
+  MUSCLE_GROUPS, EXPERIENCE_LEVELS,
 } from './lib/constants';
 import {
   getDistanceMiles, getAvgRating, renderStars, isOpenNow, getAIMatchScore,
@@ -35,13 +36,18 @@ import {
   loadGyms, upsertGym, loginOwner as dbLoginOwner,
   addGymReview, recordPassSale, savePass, loadUserPasses, updatePass, deletePass,
   getPassById, seedRealGymsIfNeeded, loadGymPasses, redeemReferral, redeemGymReferral, incrementMatchImpressions,
-  recordCheckin, loadUserCheckins,
+  recordCheckin, loadUserCheckins, getUserByReferralCode, recordReferralReward, registerGuestUser,
 } from './lib/supabase';
-import { matchmakerSearch, identifyEquipmentFromImage, searchEquipmentOnWeb, AIError } from './lib/ai';
+import { matchmakerSearch, identifyEquipmentFromImage, searchEquipmentOnWeb, generateWorkoutPlan, AIError } from './lib/ai';
 import { sendPushNotifications } from './lib/push';
 import { GLOBAL_EQUIPMENT_DATABASE } from './lib/equipment-db';
 import { INITIAL_OWNER_DATA, REAL_GYMS_DATA } from './lib/gyms-seed';
+import { getTheme } from './lib/theme';
+import { t as translate } from './lib/i18n';
 import ErrorBoundary from './components/ErrorBoundary';
+
+const THEME_STORAGE_KEY = 'igym_theme_mode';
+const LANG_STORAGE_KEY = 'igym_lang';
 
 // Foreground notifications still show a banner/alert instead of being silently queued.
 Notifications.setNotificationHandler({
@@ -71,12 +77,61 @@ async function registerForPushToken() {
   }
 }
 
+// Parses igym://gym/{gymId}?ref={code} deep links (referral shares). Written
+// by hand rather than pulling in expo-linking/URLSearchParams — neither is a
+// dependency today, and this is the only shape of link the app needs to read.
+function parseDeepLink(url) {
+  if (!url) return null;
+  const m = /^igym:\/\/gym\/([^?]+)(?:\?(.*))?$/.exec(url);
+  if (!m) return null;
+  const gymId = decodeURIComponent(m[1]);
+  const params = {};
+  (m[2] || '').split('&').forEach(pair => {
+    if (!pair) return;
+    const [k, v] = pair.split('=');
+    if (k) params[decodeURIComponent(k)] = decodeURIComponent(v || '');
+  });
+  return { gymId, ref: params.ref || null };
+}
+
 function IGymApp() {
   // --- Persisted databases (in-memory mirror of Supabase) ---
   const [userDatabase, setUserDatabase] = useState([]);
   const [ownerDatabase, setOwnerDatabase] = useState([]);
   const [isReady, setIsReady] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  // --- Theme + language ---
+  const systemScheme = useColorScheme();
+  const [themeMode, setThemeMode] = useState('light');
+  const [lang, setLang] = useState('en');
+  useEffect(() => {
+    (async () => {
+      try {
+        const [storedTheme, storedLang] = await Promise.all([
+          AsyncStorage.getItem(THEME_STORAGE_KEY),
+          AsyncStorage.getItem(LANG_STORAGE_KEY),
+        ]);
+        setThemeMode(storedTheme || systemScheme || 'light');
+        if (storedLang) setLang(storedLang);
+      } catch { /* fall back to defaults */ }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const toggleTheme = useCallback(() => {
+    setThemeMode((m) => {
+      const next = m === 'dark' ? 'light' : 'dark';
+      AsyncStorage.setItem(THEME_STORAGE_KEY, next).catch(() => {});
+      return next;
+    });
+  }, []);
+  const changeLang = useCallback((next) => {
+    setLang(next);
+    AsyncStorage.setItem(LANG_STORAGE_KEY, next).catch(() => {});
+  }, []);
+  const theme = useMemo(() => getTheme(themeMode), [themeMode]);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const t = useCallback((key) => translate(key, lang), [lang]);
 
   // --- Screen + transition ---
   const [currentScreen, setCurrentScreen] = useState('SPLASH');
@@ -108,9 +163,11 @@ function IGymApp() {
   // --- Payment / pass ---
   const [selectedPass, setSelectedPass] = useState(null);
   const [selectedPassStartDate, setSelectedPassStartDate] = useState(new Date());
+  const [activeReferralCode, setActiveReferralCode] = useState(null);
   const [viewingQR, setViewingQR] = useState(null);
   const [cardDetails, setCardDetails] = useState({ number:'', exp:'', cvv:'', name:'' });
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
+  const [isUpgradingPlan, setIsUpgradingPlan] = useState(false);
 
   // --- AI matchmaker ---
   const [aiPrompt, setAiPrompt] = useState('');
@@ -123,6 +180,15 @@ function IGymApp() {
   const [aiSummary, setAiSummary] = useState('');
   const [aiSuggestions, setAiSuggestions] = useState([]);
   const [expandedMatchId, setExpandedMatchId] = useState(null);
+
+  // --- AI workout generator (grounded in the selected gym's real equipment) ---
+  const [workoutMuscles, setWorkoutMuscles] = useState([]);
+  const [workoutExperience, setWorkoutExperience] = useState('Intermediate');
+  const [workoutGoal, setWorkoutGoal] = useState('');
+  const [isGeneratingWorkout, setIsGeneratingWorkout] = useState(false);
+  const [workoutError, setWorkoutError] = useState('');
+  const [workoutPlan, setWorkoutPlan] = useState(null);
+  const [expandedWorkoutId, setExpandedWorkoutId] = useState(null);
   const [aiError, setAiError] = useState('');
   const [usingRealAI, setUsingRealAI] = useState(false);
   const [lastSearchTurn, setLastSearchTurn] = useState(null); // { prompt, summary } of the previous search, for refinement
@@ -266,6 +332,32 @@ function IGymApp() {
     };
     loadData();
   }, []);
+
+  // --- Deep links (referral shares: igym://gym/{gymId}?ref={code}) ---
+  const [pendingDeepLink, setPendingDeepLink] = useState(null);
+
+  useEffect(() => {
+    Linking.getInitialURL().then(url => {
+      const parsed = parseDeepLink(url);
+      if (parsed) setPendingDeepLink(parsed);
+    });
+    const sub = Linking.addEventListener('url', ({ url }) => {
+      const parsed = parseDeepLink(url);
+      if (parsed) setPendingDeepLink(parsed);
+    });
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    if (!pendingDeepLink || !currentUser || ownerDatabase.length === 0) return;
+    const gym = ownerDatabase.find(g => g.id === pendingDeepLink.gymId);
+    if (gym) {
+      setSelectedGym(gym);
+      setActiveReferralCode(pendingDeepLink.ref);
+      navigateTo('GYM_DETAIL');
+    }
+    setPendingDeepLink(null);
+  }, [pendingDeepLink, currentUser, ownerDatabase, navigateTo]);
 
   // Pull-to-refresh handler for the gym list
   const refreshGyms = useCallback(async () => {
@@ -511,6 +603,10 @@ function IGymApp() {
         const { error: initErr } = await initPaymentSheet({
           paymentIntentClientSecret: clientSecret,
           merchantDisplayName: 'iGym',
+          // Surfaces Apple Pay / Google Pay as one-tap options in the sheet
+          // when the device/account supports them — no separate button/flow needed.
+          applePay: { merchantCountryCode: 'US' },
+          googlePay: { merchantCountryCode: 'US', currencyCode: 'usd', testEnv: __DEV__ },
         });
         if (initErr) throw new Error(initErr.message);
         const { error: payErr } = await presentPaymentSheet();
@@ -523,7 +619,7 @@ function IGymApp() {
 
       const startDate = selectedPassStartDate || new Date();
       let expiresAt = null, remainingPunches = null;
-      if (selectedPass.type === 'TIME') {
+      if (selectedPass.type === 'TIME' || selectedPass.type === 'MEMBERSHIP') {
         expiresAt = new Date(startDate.getTime() + (parseInt(selectedPass.value)||1) * 86400000);
       } else if (selectedPass.type === 'PUNCH') {
         remainingPunches = parseInt(selectedPass.value)||1;
@@ -548,6 +644,19 @@ function IGymApp() {
 
       await savePass(newPass, currentUser.id);
       await recordPassSale(selectedGym.id, gymReceives, platformFee);
+
+      if (activeReferralCode && selectedGym.referralFeeRate > 0) {
+        try {
+          const referrer = await getUserByReferralCode(activeReferralCode);
+          if (referrer && referrer.id !== currentUser.id) {
+            const referralFee = parseFloat((selectedPass.price * selectedGym.referralFeeRate).toFixed(2));
+            await recordReferralReward(referrer.id, referralFee, selectedGym.id);
+          }
+        } catch (err) {
+          console.warn('[Payment] referral reward failed:', err.message);
+        }
+        setActiveReferralCode(null);
+      }
 
       const updatedPasses = [newPass, ...(currentUser.activePasses||[])];
       const updatedUser = { ...currentUser, activePasses: updatedPasses };
@@ -652,6 +761,17 @@ function IGymApp() {
     }
   };
 
+  // Lighter-friction path from the login screen — skips the full registration
+  // form for someone who just wants to browse/buy a pass right now.
+  const handleGuestContinue = async () => {
+    const result = await registerGuestUser({});
+    if (result.error) return Alert.alert('Error', result.error);
+    const u = { ...result.user, activePasses: [] };
+    setCurrentUser(u); setCustomerTab('FIND_GYM');
+    await AsyncStorage.setItem('@active_user', JSON.stringify(u));
+    navigateTo('GYM_NETWORK');
+  };
+
   const handleRegister = async () => {
     const { firstName, lastName, username, password, email, address, city, state, zip, referredBy } = regData;
     if (!firstName||!lastName||!username||!password||!email||!address||!city||!zip||state==='Select State')
@@ -673,6 +793,25 @@ function IGymApp() {
     if (!currentUser?.referralCode) return;
     Share.share({
       message: `Come train with me on iGym! Enter my referral code ${currentUser.referralCode} when you sign up.`,
+    }).catch(() => {});
+  };
+
+  // Purchase-linked referral share (distinct from shareReferralCode's signup-only
+  // code): a deep link into a specific gym that credits the referrer once
+  // whoever opens it buys a pass or membership there.
+  const shareGymReferralLink = () => {
+    if (!currentUser?.referralCode || !selectedGym?.id) return;
+    const link = `igym://gym/${selectedGym.id}?ref=${currentUser.referralCode}`;
+    Share.share({
+      message: `Check out ${selectedGym.gymName} on iGym! ${link}`,
+    }).catch(() => {});
+  };
+
+  const shareGymMatch = () => {
+    if (!selectedGym?.id) return;
+    const link = `igym://gym/${selectedGym.id}`;
+    Share.share({
+      message: `I found ${selectedGym.gymName} on iGym — check it out! ${link}`,
     }).catch(() => {});
   };
 
@@ -870,6 +1009,51 @@ function IGymApp() {
     });
   };
 
+  const removeSavedWorkout = async (id) => {
+    if (!currentUser) return;
+    const updatedUser = { ...currentUser, savedWorkouts: (currentUser.savedWorkouts || []).filter(w => w.id !== id) };
+    setCurrentUser(updatedUser);
+    await AsyncStorage.setItem('@active_user', JSON.stringify(updatedUser));
+    upsertUser(updatedUser);
+  };
+
+  const toggleWorkoutMuscle = (m) => {
+    setWorkoutMuscles(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
+  };
+
+  const generateWorkout = async () => {
+    if (!apiKey) return Alert.alert('🔑 API Key Required', 'Add your Anthropic API key to generate a workout.', [
+      { text: 'Add Key Now', onPress: () => setShowApiKeyModal(true) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+    if (!selectedGym) return;
+    setIsGeneratingWorkout(true);
+    setWorkoutError('');
+    setWorkoutPlan(null);
+    try {
+      const plan = await generateWorkoutPlan({
+        apiKey, gym: selectedGym, muscleGroups: workoutMuscles,
+        goal: workoutGoal, experienceLevel: workoutExperience,
+      });
+      setWorkoutPlan(plan);
+      if (currentUser) {
+        const record = {
+          id: uniqueId('wk_'), gymId: selectedGym.id, gymName: selectedGym.gymName,
+          title: plan.title, muscleGroups: workoutMuscles, exercises: plan.exercises || [],
+          estimatedDuration: plan.estimatedDuration || '', createdAt: new Date().toISOString(),
+        };
+        const updatedUser = { ...currentUser, savedWorkouts: [record, ...(currentUser.savedWorkouts || [])].slice(0, 10) };
+        setCurrentUser(updatedUser);
+        await AsyncStorage.setItem('@active_user', JSON.stringify(updatedUser));
+        upsertUser(updatedUser);
+      }
+    } catch (err) {
+      setWorkoutError(err.message || 'Workout generation failed.');
+    } finally {
+      setIsGeneratingWorkout(false);
+    }
+  };
+
   const runAIEquipSearch = async (query, brandFilter) => {
     if (!apiKey) return Alert.alert('API Key Required', 'Add your Anthropic API key to search the web.', [
       { text: 'Add Key', onPress: () => setShowApiKeyModal(true) },
@@ -923,16 +1107,65 @@ function IGymApp() {
   const handleUpgradePlan = (newPlan) => {
     Alert.alert(
       `Upgrade to ${PLAN_TIERS[newPlan].name}`,
-      `$${PLAN_TIERS[newPlan].price}/month billed monthly.\n\n${PLAN_TIERS[newPlan].features.join('\n• ')}\n\nDemo: upgrade is instant.`,
+      `$${PLAN_TIERS[newPlan].price}/month billed monthly.\n\n${PLAN_TIERS[newPlan].features.join('\n• ')}`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: `Upgrade — $${PLAN_TIERS[newPlan].price}/mo`, onPress: async () => {
-          await persistOwner({ ...currentOwner, plan: newPlan });
-          setShowSubscriptionModal(false);
-          Alert.alert('🎉 Upgraded!', `You're now on the ${PLAN_TIERS[newPlan].name} plan.`);
-        }},
+        { text: `Upgrade — $${PLAN_TIERS[newPlan].price}/mo`, onPress: () => processUpgradePlan(newPlan) },
       ]
     );
+  };
+
+  const processUpgradePlan = async (newPlan) => {
+    setIsUpgradingPlan(true);
+    try {
+      let clientSecret;
+      try {
+        const res = await fetch(`${env.BACKEND_URL}/create-payment-intent`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            amount: PLAN_TIERS[newPlan].price,
+            gymName: currentOwner?.gymName,
+            passLabel: `${PLAN_TIERS[newPlan].name} Plan Subscription`,
+            gymId: currentOwner?.id,
+            userId: currentOwner?.id,
+          }),
+        });
+        const json = await res.json();
+        if (json.error) throw new Error(json.error);
+        clientSecret = json.clientSecret;
+      } catch (backendErr) {
+        console.warn('Backend unreachable, demo mode:', backendErr.message);
+        clientSecret = null;
+      }
+
+      if (clientSecret && env.STRIPE_PUBLISHABLE) {
+        const { error: initErr } = await initPaymentSheet({
+          paymentIntentClientSecret: clientSecret,
+          merchantDisplayName: 'iGym',
+          // Surfaces Apple Pay / Google Pay as one-tap options in the sheet
+          // when the device/account supports them — no separate button/flow needed.
+          applePay: { merchantCountryCode: 'US' },
+          googlePay: { merchantCountryCode: 'US', currencyCode: 'usd', testEnv: __DEV__ },
+        });
+        if (initErr) throw new Error(initErr.message);
+        const { error: payErr } = await presentPaymentSheet();
+        if (payErr) {
+          setIsUpgradingPlan(false);
+          if (payErr.code !== 'Canceled') Alert.alert('Payment Failed', payErr.message);
+          return;
+        }
+      }
+
+      await persistOwner({ ...currentOwner, plan: newPlan });
+      setIsUpgradingPlan(false);
+      setShowSubscriptionModal(false);
+      Alert.alert('🎉 Upgraded!', `You're now on the ${PLAN_TIERS[newPlan].name} plan.`);
+    } catch (err) {
+      console.error('[PlanUpgrade]', err);
+      setIsUpgradingPlan(false);
+      Alert.alert('Upgrade Error', err.message || 'Something went wrong. Please try again.');
+    }
   };
 
   const handleDowngradePlan = (newPlan) => {
@@ -1088,6 +1321,7 @@ function IGymApp() {
                 <Text style={styles.separator}>|</Text>
                 <TouchableOpacity onPress={handleForgotPassword}><Text style={styles.whiteLink}>Forgot Password?</Text></TouchableOpacity>
               </View>
+              <TouchableOpacity onPress={handleGuestContinue}><Text style={[styles.whiteLink,{textAlign:'center',marginTop:8}]}>{t('continueAsGuest')} →</Text></TouchableOpacity>
               <TouchableOpacity onPress={() => navigateTo('OWNER_LOGIN')}><Text style={styles.ownerLinkText}>Gym Owner Portal →</Text></TouchableOpacity>
             </View>
           </ImageBackground>
@@ -1478,6 +1712,13 @@ function IGymApp() {
                   <TextInput style={styles.input} value={infoForm.phone} onChangeText={t => setInfoForm(p=>({...p,phone:t}))} placeholder="Contact Phone" keyboardType="phone-pad"/>
                   <TextInput style={styles.input} value={infoForm.pricing} onChangeText={t => setInfoForm(p=>({...p,pricing:t}))} placeholder="Display Pricing"/>
                   <TextInput style={styles.input} value={String(infoForm.monthlyPrice||'')} onChangeText={t => setInfoForm(p=>({...p,monthlyPrice:t}))} placeholder="Numeric Monthly Price" keyboardType="numeric"/>
+                  <TextInput
+                    style={styles.input}
+                    value={infoForm.referralFeeRate ? String(infoForm.referralFeeRate * 100) : ''}
+                    onChangeText={t => setInfoForm(p=>({...p, referralFeeRate: t ? parseFloat(t)/100 : 0}))}
+                    placeholder="Referral fee % (0 = off) — paid to whoever referred the buyer"
+                    keyboardType="numeric"
+                  />
 
                   <Text style={styles.sectionLabel}>⏰ Hours of Operation</Text>
                   <TextInput style={styles.input} value={infoForm.hoursDisplay} onChangeText={t => setInfoForm(p=>({...p,hoursDisplay:t}))} placeholder="e.g. Mon-Fri 5AM-10PM"/>
@@ -1492,7 +1733,7 @@ function IGymApp() {
                       <View key={pass.id} style={[styles.rowJustify,{marginBottom:10,paddingBottom:10,borderBottomWidth:1,borderBottomColor:'#EEE'}]}>
                         <View>
                           <Text style={{fontWeight:'bold',fontSize:16}}>{pass.label}</Text>
-                          <Text style={{color:'#555',fontSize:12}}>{pass.type==='TIME'?`${pass.value} Days Valid`:`${pass.value} Scans`}</Text>
+                          <Text style={{color:'#555',fontSize:12}}>{pass.type==='PUNCH'?`${pass.value} Scans`:`${pass.value} Days Valid`}</Text>
                         </View>
                         <View style={{alignItems:'flex-end'}}>
                           <Text style={{color:'#34C759',fontWeight:'bold'}}>${pass.price.toFixed(2)}</Text>
@@ -1646,7 +1887,7 @@ function IGymApp() {
                       }}
                     >
                       {item.image && (
-                        <Image source={{uri:item.image}} style={{width:'100%', height:150, borderRadius:10, marginBottom:10, backgroundColor:'#EEE'}} resizeMode="cover"/>
+                        <Image source={{uri:item.image}} style={{width:'100%', height:150, borderRadius:10, marginBottom:10, backgroundColor:theme.border}} resizeMode="cover" accessible accessibilityLabel={`Photo of ${item.name}`}/>
                       )}
                       <View style={styles.rowJustify}>
                         <Text style={styles.itemTitle}>{item.name}</Text>
@@ -1744,7 +1985,7 @@ function IGymApp() {
                   ) : null)}
                   renderItem={({item}) => (
                     <View style={styles.equipSearchCard}>
-                      {item.image ? <Image source={{uri: item.image}} style={{width:'100%', height:130, borderRadius:10, marginBottom:10, backgroundColor:'#EEE'}} resizeMode="cover"/> : null}
+                      {item.image ? <Image source={{uri: item.image}} style={{width:'100%', height:130, borderRadius:10, marginBottom:10, backgroundColor:theme.border}} resizeMode="cover" accessible accessibilityLabel={`Photo of ${item.name}`}/> : null}
                       <View style={[styles.rowJustify, {marginBottom:6}]}>
                         <Text style={[styles.itemTitle, {flex:1, marginRight:8}]}>{item.name}</Text>
                         <Text style={styles.categoryBadge}>{item.category}</Text>
@@ -2333,24 +2574,67 @@ function IGymApp() {
                 <ScrollView contentContainerStyle={{paddingHorizontal:25}}>
                   {memberCheckins.length > 0 && (() => {
                     const stats = computeCheckinStats(memberCheckins);
+                    const lastCheckinMs = Math.max(...memberCheckins.map(c => new Date(c.created_at).getTime()));
+                    const checkedInToday = new Date(lastCheckinMs).toDateString() === new Date().toDateString();
+                    const streakAtRisk = stats.currentStreak > 0 && !checkedInToday;
                     return (
-                      <View style={[styles.infoBox,{backgroundColor:'#F0F4FF',borderColor:'#C7D6FF',borderWidth:1,marginBottom:15}]}>
-                        <View style={styles.rowJustify}>
-                          <Text style={{fontSize:16,fontWeight:'800',color:'#3A4CA8'}}>🔥 {stats.currentStreak}-day streak</Text>
-                          <Text style={{fontSize:14,fontWeight:'700',color:'#3A4CA8'}}>{stats.totalVisits} visits</Text>
+                      <>
+                        <View style={[styles.infoBox,{backgroundColor:'#F0F4FF',borderColor:'#C7D6FF',borderWidth:1,marginBottom:15}]}>
+                          <View style={styles.rowJustify}>
+                            <Text style={{fontSize:16,fontWeight:'800',color:'#3A4CA8'}}>🔥 {stats.currentStreak}-day streak</Text>
+                            <Text style={{fontSize:14,fontWeight:'700',color:'#3A4CA8'}}>{stats.totalVisits} visits</Text>
+                          </View>
+                          {stats.badges.length > 0 && (
+                            <View style={{flexDirection:'row',flexWrap:'wrap',gap:6,marginTop:10}}>
+                              {stats.badges.map(b => (
+                                <View key={b.threshold} style={{backgroundColor:'#FFF',paddingHorizontal:10,paddingVertical:4,borderRadius:12,borderWidth:1,borderColor:'#C7D6FF'}}>
+                                  <Text style={{fontSize:11,fontWeight:'700',color:'#3A4CA8'}}>🏅 {b.label}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          )}
                         </View>
-                        {stats.badges.length > 0 && (
-                          <View style={{flexDirection:'row',flexWrap:'wrap',gap:6,marginTop:10}}>
-                            {stats.badges.map(b => (
-                              <View key={b.threshold} style={{backgroundColor:'#FFF',paddingHorizontal:10,paddingVertical:4,borderRadius:12,borderWidth:1,borderColor:'#C7D6FF'}}>
-                                <Text style={{fontSize:11,fontWeight:'700',color:'#3A4CA8'}}>🏅 {b.label}</Text>
-                              </View>
-                            ))}
+                        {streakAtRisk && (
+                          <View style={{backgroundColor:'#FFF3E0',borderColor:'#FF9500',borderWidth:1,borderRadius:12,padding:12,marginBottom:15}}>
+                            <Text style={{fontSize:13,fontWeight:'700',color:'#B36B00'}}>⏰ {t('streakAtRisk')}</Text>
                           </View>
                         )}
-                      </View>
+                      </>
                     );
                   })()}
+                  {(currentUser?.savedWorkouts || []).length > 0 && (
+                    <View style={[styles.infoBox,{marginBottom:15}]}>
+                      <Text style={{fontSize:12,fontWeight:'700',color:theme.textMuted,marginBottom:8,textTransform:'uppercase'}}>✨ Recent AI Workouts</Text>
+                      {currentUser.savedWorkouts.map(w => {
+                        const expanded = expandedWorkoutId === w.id;
+                        return (
+                          <View key={w.id} style={{borderTopWidth:1,borderTopColor:theme.border,paddingTop:10,marginTop:10}}>
+                            <TouchableOpacity onPress={() => setExpandedWorkoutId(expanded ? null : w.id)} style={styles.rowJustify}>
+                              <View style={{flex:1}}>
+                                <Text style={{fontSize:14,fontWeight:'700',color:theme.text}}>{w.title}</Text>
+                                <Text style={{fontSize:11,color:theme.textMuted,marginTop:2}}>
+                                  {w.gymName} · {(w.muscleGroups||[]).join(', ') || 'Full body'} · {new Date(w.createdAt).toLocaleDateString()}
+                                </Text>
+                              </View>
+                              <Text style={{color:theme.textMuted,fontSize:12}}>{expanded ? '▲' : '▼'}</Text>
+                            </TouchableOpacity>
+                            {expanded && (
+                              <View style={{marginTop:8}}>
+                                {(w.exercises||[]).map((ex, i) => (
+                                  <Text key={i} style={{fontSize:12,color:theme.textMuted,marginBottom:4}}>
+                                    {i+1}. {ex.name} — {ex.sets} × {ex.reps} ({ex.equipment})
+                                  </Text>
+                                ))}
+                                <TouchableOpacity onPress={() => removeSavedWorkout(w.id)}>
+                                  <Text style={{fontSize:12,fontWeight:'700',color:'#FF3B30',marginTop:4}}>Remove</Text>
+                                </TouchableOpacity>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                    </View>
+                  )}
                   {currentUser?.referralCode && (
                     <TouchableOpacity style={[styles.infoBox,{backgroundColor:'#1C1C1E',borderWidth:0,marginBottom:15}]} onPress={shareReferralCode}>
                       <View style={styles.rowJustify}>
@@ -2360,6 +2644,11 @@ function IGymApp() {
                             Your code: {currentUser.referralCode}
                             {currentUser.referralCount > 0 ? `  •  ${currentUser.referralCount} joined so far` : ''}
                           </Text>
+                          {currentUser.referralCredit > 0 && (
+                            <Text style={{fontSize:12, color:'#34C759', fontWeight:'700', marginTop:3}}>
+                              💰 ${Number(currentUser.referralCredit).toFixed(2)} earned from referrals
+                            </Text>
+                          )}
                         </View>
                         <Text style={{fontSize:14, fontWeight:'700', color:'#FFF'}}>Share →</Text>
                       </View>
@@ -2382,7 +2671,28 @@ function IGymApp() {
                     </View>
                   </TouchableOpacity>
 
-                  <View style={{height:1,backgroundColor:'#EEE',marginVertical:20}}/>
+                  <View style={{height:1,backgroundColor:theme.border,marginVertical:20}}/>
+                  <Text style={styles.sectionLabel}>Preferences</Text>
+                  <View style={[styles.infoBox,{marginBottom:15}]}>
+                    <View style={styles.rowJustify}>
+                      <Text style={{fontSize:15,fontWeight:'600',color:theme.text}}>🌙 Dark Mode</Text>
+                      <Switch value={themeMode === 'dark'} onValueChange={toggleTheme} trackColor={{ false: theme.border, true: theme.brand }}/>
+                    </View>
+                    <View style={[styles.rowJustify,{marginTop:15}]}>
+                      <Text style={{fontSize:15,fontWeight:'600',color:theme.text}}>🌐 Language</Text>
+                      <View style={{flexDirection:'row',gap:8}}>
+                        {[{code:'en',label:'EN'},{code:'es',label:'ES'}].map(l => (
+                          <TouchableOpacity
+                            key={l.code}
+                            onPress={() => changeLang(l.code)}
+                            style={{paddingHorizontal:14,paddingVertical:7,borderRadius:16,backgroundColor: lang === l.code ? theme.brand : theme.inputBg}}
+                          >
+                            <Text style={{fontSize:12,fontWeight:'700',color: lang === l.code ? '#FFF' : theme.textMuted}}>{l.label}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    </View>
+                  </View>
                   <Text style={styles.sectionLabel}>Account Details</Text>
                   <TextInput style={styles.input} value={profileEditForm.email} onChangeText={t => setProfileEditForm(p=>({...p,email:t}))} placeholder="Email" keyboardType="email-address" autoCapitalize="none"/>
                   <TextInput style={styles.input} value={profileEditForm.username} onChangeText={t => setProfileEditForm(p=>({...p,username:t}))} placeholder="Username" autoCapitalize="none"/>
@@ -2469,9 +2779,14 @@ function IGymApp() {
             <ScrollView style={{flex:1,padding:25}}>
               <View style={styles.rowJustify}>
                 <TouchableOpacity onPress={() => { setSelectedGym(null); navigateTo('GYM_NETWORK'); }}><Text style={styles.backLink}>← Back</Text></TouchableOpacity>
-                <TouchableOpacity onPress={() => toggleFavorite(selectedGym.id)}>
-                  <Text style={{fontSize:26}}>{gymFaved?'❤️':'🤍'}</Text>
-                </TouchableOpacity>
+                <View style={{flexDirection:'row',gap:16,alignItems:'center'}}>
+                  <TouchableOpacity onPress={shareGymMatch} accessibilityLabel={t('shareMatch')}>
+                    <Text style={{fontSize:22}}>🔗</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => toggleFavorite(selectedGym.id)}>
+                    <Text style={{fontSize:26}}>{gymFaved?'❤️':'🤍'}</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <Text style={styles.header}>{selectedGym?.gymName}</Text>
@@ -2503,6 +2818,12 @@ function IGymApp() {
                 {selectedGym?.hoursDisplay && <Text style={styles.infoText}>⏰ {selectedGym.hoursDisplay}</Text>}
               </View>
 
+              {selectedGym?.referralFeeRate > 0 && currentUser?.referralCode && (
+                <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#111',marginTop:12}]} onPress={shareGymReferralLink}>
+                  <Text style={styles.btnText}>🎁 Refer a friend, earn {Math.round(selectedGym.referralFeeRate*1000)/10}%</Text>
+                </TouchableOpacity>
+              )}
+
               <Text style={[styles.sectionLabel,{marginTop:15}]}>🎟️ Access Passes</Text>
               {(selectedGym?.passes||[]).length > 0 ? selectedGym.passes.map(pass => (
                 <TouchableOpacity key={pass.id} style={[styles.primaryBtn,{backgroundColor:'#34C759',marginBottom:10}]} onPress={() => { setSelectedPass(pass); navigateTo('PAYMENT_PORTAL'); }}>
@@ -2510,7 +2831,7 @@ function IGymApp() {
                     <Text style={styles.btnText}>🎟️ {pass.label}</Text>
                     <Text style={styles.btnText}>${pass.price.toFixed(2)}</Text>
                   </View>
-                  <Text style={{color:'#FFF',fontSize:12,marginTop:4,fontWeight:'500'}}>{pass.type==='TIME'?`Valid ${pass.value} day(s)`:`${pass.value} scans included`}</Text>
+                  <Text style={{color:'#FFF',fontSize:12,marginTop:4,fontWeight:'500'}}>{pass.type==='PUNCH'?`${pass.value} scans included`:`Valid ${pass.value} day(s)`}</Text>
                 </TouchableOpacity>
               )) : selectedGym?.dayPassPrice > 0 ? (
                 <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#34C759',marginBottom:10}]} onPress={() => { setSelectedPass({id:'dp',label:'Day Pass',price:selectedGym.dayPassPrice,type:'TIME',value:1}); navigateTo('PAYMENT_PORTAL'); }}>
@@ -2552,6 +2873,76 @@ function IGymApp() {
                   <Text style={{marginTop:6,color:'#555',fontSize:13}}>Target: {item.targetArea}</Text>
                 </TouchableOpacity>
               )}/>
+
+              <Text style={[styles.sectionLabel,{marginTop:20}]}>✨ AI Workout Generator</Text>
+              <View style={styles.aiContainer}>
+                <Text style={{fontSize:13,color:theme.textMuted,marginBottom:10}}>
+                  Builds a workout using only the equipment {selectedGym?.gymName} actually has.
+                </Text>
+                <Text style={{fontSize:12,fontWeight:'700',color:theme.textMuted,marginBottom:8,textTransform:'uppercase'}}>Target muscle group(s)</Text>
+                <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginBottom:12}}>
+                  {MUSCLE_GROUPS.map(m => {
+                    const active = workoutMuscles.includes(m);
+                    return (
+                      <TouchableOpacity key={m} onPress={() => toggleWorkoutMuscle(m)}
+                        style={{paddingHorizontal:12,paddingVertical:6,borderRadius:16,backgroundColor: active ? theme.accent : theme.inputBg}}>
+                        <Text style={{fontSize:12,fontWeight:'700',color: active ? '#FFF' : theme.textMuted}}>{m}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={{flexDirection:'row',gap:8,marginBottom:12}}>
+                  {EXPERIENCE_LEVELS.map(lvl => (
+                    <TouchableOpacity key={lvl} onPress={() => setWorkoutExperience(lvl)}
+                      style={{flex:1,paddingVertical:9,borderRadius:10,alignItems:'center',backgroundColor: workoutExperience===lvl ? theme.accent : theme.inputBg}}>
+                      <Text style={{fontSize:12,fontWeight:'700',color: workoutExperience===lvl ? '#FFF' : theme.textMuted}}>{lvl}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TextInput
+                  style={[styles.input,{marginBottom:12}]}
+                  placeholder="Optional goal, e.g. 'training for a 5K'"
+                  placeholderTextColor={theme.placeholder}
+                  value={workoutGoal}
+                  onChangeText={setWorkoutGoal}
+                />
+                {!apiKey && (
+                  <TouchableOpacity onPress={() => setShowApiKeyModal(true)} style={styles.aiKeyNudge}>
+                    <Text style={styles.aiKeyNudgeText}>⚡ Add your Anthropic API key to generate a workout →</Text>
+                  </TouchableOpacity>
+                )}
+                <TouchableOpacity style={[styles.equipAiBtn, !apiKey && styles.equipAiBtnDisabled, {marginTop:12}]} onPress={generateWorkout} disabled={!apiKey || isGeneratingWorkout}>
+                  {isGeneratingWorkout ? <ActivityIndicator color="#FFF"/> : <Text style={styles.equipAiBtnText}>Generate Workout</Text>}
+                </TouchableOpacity>
+                {!!workoutError && (
+                  <View style={[styles.equipAiError,{marginTop:12}]}><Text style={{color:'#C62828',fontSize:13}}>{workoutError}</Text></View>
+                )}
+              </View>
+
+              {workoutPlan && (
+                <View style={[styles.equipAiResults,{marginTop:12}]}>
+                  <View style={styles.rowJustify}>
+                    <Text style={{fontSize:18,fontWeight:'800',color:theme.text,flex:1}}>{workoutPlan.title}</Text>
+                    {!!workoutPlan.estimatedDuration && (
+                      <View style={styles.aiBadge}><Text style={styles.aiBadgeText}>⏱ {workoutPlan.estimatedDuration}</Text></View>
+                    )}
+                  </View>
+                  {!!workoutPlan.summary && <Text style={{fontSize:13,color:theme.textMuted,marginTop:6,lineHeight:19}}>{workoutPlan.summary}</Text>}
+                  {(workoutPlan.exercises||[]).map((ex, i) => (
+                    <View key={i} style={[styles.itemCard,{marginTop:12,marginBottom:0}]}>
+                      <View style={styles.rowJustify}>
+                        <Text style={[styles.itemTitle,{fontSize:15}]}>{i+1}. {ex.name}</Text>
+                        <Text style={styles.categoryBadge}>{ex.equipment}</Text>
+                      </View>
+                      <Text style={{marginTop:6,color:theme.textMuted,fontSize:12}}>
+                        Target: {ex.targetMuscle} · {ex.sets} sets × {ex.reps}{ex.restSeconds ? ` · rest ${ex.restSeconds}s` : ''}
+                      </Text>
+                      {!!ex.instructions && <Text style={{marginTop:4,color:theme.textMuted,fontSize:12}}>{ex.instructions}</Text>}
+                    </View>
+                  ))}
+                  {!!workoutPlan.notes && <Text style={{marginTop:12,color:theme.textMuted,fontSize:12,fontStyle:'italic'}}>{workoutPlan.notes}</Text>}
+                </View>
+              )}
 
               <Text style={[styles.sectionLabel,{marginTop:20}]}>Member Reviews</Text>
               {(selectedGym?.gymReviews||[]).length > 0 ? (selectedGym.gymReviews||[]).map(rev => (
@@ -2629,7 +3020,7 @@ function IGymApp() {
                     <Text style={{fontSize:16,color:'#333'}}>{selectedPass?.label}</Text>
                     <Text style={{fontSize:18,fontWeight:'bold',color:'#34C759'}}>${selectedPass?.price.toFixed(2)}</Text>
                   </View>
-                  <Text style={{marginTop:5,fontSize:12,color:'#888'}}>{selectedPass?.type==='TIME'?`Valid ${selectedPass.value} day(s) from start date`:`${selectedPass.value} gym entry scans included`}</Text>
+                  <Text style={{marginTop:5,fontSize:12,color:'#888'}}>{selectedPass?.type==='PUNCH'?`${selectedPass.value} gym entry scans included`:`Valid ${selectedPass.value} day(s) from start date`}</Text>
                   <TouchableOpacity
                     style={[styles.rowJustify,{marginTop:12,paddingTop:12,borderTopWidth:1,borderTopColor:'#DDD'}]}
                     onPress={() => { setDatePickerField('passStart'); setShowDatePicker(true); }}
@@ -2726,7 +3117,7 @@ function IGymApp() {
                   <Text style={[styles.header,{flex:1,marginRight:10}]}>{selectedEquipment?.name}</Text>
                   <Text style={styles.categoryBadge}>{selectedEquipment?.category}</Text>
                 </View>
-                {selectedEquipment?.image ? <Image source={{uri:selectedEquipment.image}} style={styles.equipImage}/> : <View style={styles.mediaPlaceholder}><Text>📷 No Image</Text></View>}
+                {selectedEquipment?.image ? <Image source={{uri:selectedEquipment.image}} style={styles.equipImage} accessible accessibilityLabel={`Photo of ${selectedEquipment.name}`}/> : <View style={styles.mediaPlaceholder}><Text style={{color:theme.textMuted}}>📷 No Image</Text></View>}
                 {selectedEquipment?.muscleDiagram ? (
                   <>
                     <Text style={styles.sectionLabel}>Muscle Diagram</Text>
@@ -2970,8 +3361,8 @@ function IGymApp() {
                       </View>
                     ))}
                     {!isCurrent && !isLower && (
-                      <TouchableOpacity style={[styles.primaryBtn, {backgroundColor: tier.color, marginTop:14}]} onPress={() => handleUpgradePlan(key)}>
-                        <Text style={styles.btnText}>Upgrade to {tier.name} →</Text>
+                      <TouchableOpacity style={[styles.primaryBtn, {backgroundColor: tier.color, marginTop:14}]} onPress={() => handleUpgradePlan(key)} disabled={isUpgradingPlan}>
+                        {isUpgradingPlan ? <ActivityIndicator color="#FFF"/> : <Text style={styles.btnText}>Upgrade to {tier.name} →</Text>}
                       </TouchableOpacity>
                     )}
                     {!isCurrent && isLower && (
@@ -3009,139 +3400,150 @@ export default function App() {
 }
 
 // ─── STYLES ────────────────────────────────────────────────────────────
-const styles = StyleSheet.create({
-  container:          { flex:1, backgroundColor:'#FFF' },
+// Factory instead of a static StyleSheet.create() so every screen can
+// re-theme when the user switches dark/light mode. `tint()`/`tintText()`
+// collapse light-mode "pastel accent" backgrounds/text down to neutral
+// card/text colors in dark mode, since a bright pastel tile looks wrong on
+// a dark background — everything else maps 1:1 to a semantic theme token.
+function makeStyles(colors) {
+  const dark = colors.mode === 'dark';
+  const tint = (lightHex) => (dark ? colors.card : lightHex);
+  const tintText = (lightHex) => (dark ? colors.text : lightHex);
+
+  return StyleSheet.create({
+  container:          { flex:1, backgroundColor:colors.background },
   fullScreen:         { flex:1 },
   overlay:            { flex:1, backgroundColor:'rgba(0,0,0,0.7)', justifyContent:'center', padding:40 },
   padding:            { padding:25 },
   brandText:          { color:'#FFF', fontSize:60, fontWeight:'900', textAlign:'center', marginBottom:5 },
   taglineText:        { color:'#FFF', fontSize:18, fontWeight:'500', textAlign:'center', marginBottom:30, fontStyle:'italic' },
   loginCard:          { backgroundColor:'rgba(255,255,255,0.1)', padding:20, borderRadius:20, marginBottom:20 },
-  header:             { fontSize:32, fontWeight:'800', color:'#111', marginBottom:10 },
-  subHeader:          { fontSize:16, color:'#666', marginBottom:20 },
-  input:              { backgroundColor:'#F0F0F0', padding:16, borderRadius:12, marginBottom:15, color:'#000', justifyContent:'center' },
-  primaryBtn:         { backgroundColor:'#007AFF', padding:18, borderRadius:12, alignItems:'center' },
-  secondaryBtn:       { backgroundColor:'#34C759', padding:18, borderRadius:12, alignItems:'center', marginTop:10 },
+  header:             { fontSize:32, fontWeight:'800', color:colors.text, marginBottom:10 },
+  subHeader:          { fontSize:16, color:colors.textMuted, marginBottom:20 },
+  input:              { backgroundColor:colors.inputBg, padding:16, borderRadius:12, marginBottom:15, color:colors.text, justifyContent:'center' },
+  primaryBtn:         { backgroundColor:colors.brand, padding:18, borderRadius:12, alignItems:'center' },
+  secondaryBtn:       { backgroundColor:colors.success, padding:18, borderRadius:12, alignItems:'center', marginTop:10 },
   btnText:            { color:'#FFF', fontWeight:'bold', fontSize:16 },
   linkRow:            { flexDirection:'row', justifyContent:'center', alignItems:'center' },
   whiteLink:          { color:'#DDD', fontSize:14 },
   boldText:           { fontWeight:'bold' },
-  separator:          { color:'#666', marginHorizontal:10 },
-  ownerLinkText:      { color:'#007AFF', fontWeight:'bold', textAlign:'center', marginTop:30 },
-  backLink:           { color:'#007AFF', marginBottom:15, fontWeight:'600' },
+  separator:          { color:colors.textMuted, marginHorizontal:10 },
+  ownerLinkText:      { color:colors.brand, fontWeight:'bold', textAlign:'center', marginTop:30 },
+  backLink:           { color:colors.brand, marginBottom:15, fontWeight:'600' },
   row:                { flexDirection:'row' },
   rowJustify:         { flexDirection:'row', justifyContent:'space-between', alignItems:'center' },
-  sectionLabel:       { color:'#8E8E93', fontSize:12, fontWeight:'bold', marginVertical:15, textTransform:'uppercase' },
-  uploadBtn:          { borderStyle:'dashed', borderWidth:2, borderColor:'#DDD', height:100, borderRadius:12, marginBottom:15, justifyContent:'center', alignItems:'center', overflow:'hidden' },
+  sectionLabel:       { color:colors.textMuted, fontSize:12, fontWeight:'bold', marginVertical:15, textTransform:'uppercase' },
+  uploadBtn:          { borderStyle:'dashed', borderWidth:2, borderColor:colors.border, height:100, borderRadius:12, marginBottom:15, justifyContent:'center', alignItems:'center', overflow:'hidden' },
   previewImage:       { width:'100%', height:'100%', resizeMode:'cover' },
-  modalOverlay:       { flex:1, backgroundColor:'rgba(0,0,0,0.5)', justifyContent:'center', alignItems:'center' },
-  calendarCard:       { backgroundColor:'#FFF', width:'80%', borderRadius:20, padding:20 },
-  modalTitle:         { fontSize:18, fontWeight:'bold', textAlign:'center' },
-  itemCard:           { backgroundColor:'#F8F8F8', padding:20, borderRadius:15, marginBottom:12, borderWidth:1, borderColor:'#EEE' },
-  itemTitle:          { fontSize:18, fontWeight:'700', flexShrink:1 },
-  itemSub:            { color:'#666' },
-  tabRow:             { flexDirection:'row', marginBottom:20, backgroundColor:'#F0F0F0', borderRadius:12, padding:4 },
+  modalOverlay:       { flex:1, backgroundColor:colors.overlay, justifyContent:'center', alignItems:'center' },
+  calendarCard:       { backgroundColor:colors.surface, width:'80%', borderRadius:20, padding:20 },
+  modalTitle:         { fontSize:18, fontWeight:'bold', textAlign:'center', color:colors.text },
+  itemCard:           { backgroundColor:colors.card, padding:20, borderRadius:15, marginBottom:12, borderWidth:1, borderColor:colors.border },
+  itemTitle:          { fontSize:18, fontWeight:'700', flexShrink:1, color:colors.text },
+  itemSub:            { color:colors.textMuted },
+  tabRow:             { flexDirection:'row', marginBottom:20, backgroundColor:colors.inputBg, borderRadius:12, padding:4 },
   tabBtn:             { flex:1, paddingVertical:10, alignItems:'center', borderRadius:10 },
-  tabBtnActive:       { backgroundColor:'#FFF', shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.1, shadowRadius:4, elevation:2 },
-  tabBtnText:         { color:'#666', fontWeight:'bold', fontSize:12 },
-  tabBtnTextActive:   { color:'#007AFF' },
-  infoBox:            { backgroundColor:'#F8F8F8', padding:15, borderRadius:12, marginBottom:15, borderWidth:1, borderColor:'#EEE' },
-  infoText:           { fontSize:15, color:'#333', marginBottom:6, fontWeight:'500' },
-  filterChip:         { paddingHorizontal:16, paddingVertical:9, borderRadius:20, backgroundColor:'#F0F0F0', marginRight:8 },
-  filterChipActive:   { backgroundColor:'#007AFF' },
-  filterChipText:     { color:'#333', fontWeight:'600', fontSize:13 },
+  tabBtnActive:       { backgroundColor:colors.surface, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.1, shadowRadius:4, elevation:2 },
+  tabBtnText:         { color:colors.textMuted, fontWeight:'bold', fontSize:12 },
+  tabBtnTextActive:   { color:colors.brand },
+  infoBox:            { backgroundColor:colors.card, padding:15, borderRadius:12, marginBottom:15, borderWidth:1, borderColor:colors.border },
+  infoText:           { fontSize:15, color:colors.text, marginBottom:6, fontWeight:'500' },
+  filterChip:         { paddingHorizontal:16, paddingVertical:9, borderRadius:20, backgroundColor:colors.inputBg, marginRight:8 },
+  filterChipActive:   { backgroundColor:colors.brand },
+  filterChipText:     { color:colors.text, fontWeight:'600', fontSize:13 },
   filterChipTextActive: { color:'#FFF' },
-  categoryBadge:      { backgroundColor:'#E5F1FF', color:'#007AFF', paddingHorizontal:10, paddingVertical:4, borderRadius:8, fontSize:12, fontWeight:'bold', overflow:'hidden' },
-  equipImage:         { width:'100%', height:250, borderRadius:15, marginVertical:15, backgroundColor:'#EEE' },
-  mediaPlaceholder:   { width:'100%', height:200, backgroundColor:'#EEE', borderRadius:15, justifyContent:'center', alignItems:'center', marginVertical:15 },
-  descriptionText:    { fontSize:16, lineHeight:24, color:'#444', marginBottom:10 },
-  reviewCard:         { backgroundColor:'#F0F0F0', padding:15, borderRadius:12, marginBottom:10 },
+  categoryBadge:      { backgroundColor:tint('#E5F1FF'), color:colors.brand, paddingHorizontal:10, paddingVertical:4, borderRadius:8, fontSize:12, fontWeight:'bold', overflow:'hidden' },
+  equipImage:         { width:'100%', height:250, borderRadius:15, marginVertical:15, backgroundColor:colors.border },
+  mediaPlaceholder:   { width:'100%', height:200, backgroundColor:colors.card, borderRadius:15, justifyContent:'center', alignItems:'center', marginVertical:15 },
+  descriptionText:    { fontSize:16, lineHeight:24, color:colors.text, marginBottom:10 },
+  reviewCard:         { backgroundColor:colors.card, padding:15, borderRadius:12, marginBottom:10 },
   videoContainer:     { width:'100%', height:200, marginBottom:20, borderRadius:12, overflow:'hidden', backgroundColor:'#000' },
   videoThumbnail:     { width:'100%', height:'100%', justifyContent:'center', alignItems:'center' },
   playButtonOverlay:  { width:60, height:60, backgroundColor:'rgba(0,0,0,0.6)', borderRadius:30, justifyContent:'center', alignItems:'center', borderWidth:2, borderColor:'#FFF' },
   playIcon:           { color:'#FFF', fontSize:24, marginLeft:4 },
-  aiContainer:        { backgroundColor:'#F2F2F7', padding:15, borderRadius:18, marginBottom:12, borderWidth:1, borderColor:'#E5E5EA' },
-  aiTitle:            { fontSize:16, fontWeight:'bold', color:'#5856D6', marginBottom:8 },
-  aiSearchRow:        { flexDirection:'row', alignItems:'center', backgroundColor:'#FFF', borderRadius:12, paddingRight:10, borderWidth:1, borderColor:'#E5E5EA' },
-  aiInput:            { backgroundColor:'transparent', padding:12, borderRadius:10, flex:1, color:'#000' },
-  aiSearchIconBtn:    { backgroundColor:'#5856D6', width:44, height:44, borderRadius:10, justifyContent:'center', alignItems:'center', marginLeft:10 },
+  aiContainer:        { backgroundColor:tint('#F2F2F7'), padding:15, borderRadius:18, marginBottom:12, borderWidth:1, borderColor:colors.border },
+  aiTitle:            { fontSize:16, fontWeight:'bold', color:colors.accent, marginBottom:8 },
+  aiSearchRow:        { flexDirection:'row', alignItems:'center', backgroundColor:colors.surface, borderRadius:12, paddingRight:10, borderWidth:1, borderColor:colors.border },
+  aiInput:            { backgroundColor:'transparent', padding:12, borderRadius:10, flex:1, color:colors.text },
+  aiSearchIconBtn:    { backgroundColor:colors.accent, width:44, height:44, borderRadius:10, justifyContent:'center', alignItems:'center', marginLeft:10 },
   clearAiBtn:         { marginTop:10, alignSelf:'center' },
-  clearAiText:        { color:'#FF3B30', fontWeight:'bold', fontSize:12 },
-  stateMenuCard:      { backgroundColor:'#FFF', width:'80%', height:'60%', borderRadius:20, padding:20 },
-  stateOption:        { paddingVertical:15, borderBottomWidth:1, borderBottomColor:'#EEE', alignItems:'center' },
-  stateText:          { fontSize:18, fontWeight:'600', color:'#333' },
-  ticketCard:         { backgroundColor:'#FFF', padding:25, borderRadius:20, borderWidth:2, borderColor:'#000', shadowColor:'#000', shadowOffset:{width:0,height:4}, shadowOpacity:0.1, shadowRadius:10, elevation:5 },
+  clearAiText:        { color:colors.danger, fontWeight:'bold', fontSize:12 },
+  stateMenuCard:      { backgroundColor:colors.surface, width:'80%', height:'60%', borderRadius:20, padding:20 },
+  stateOption:        { paddingVertical:15, borderBottomWidth:1, borderBottomColor:colors.border, alignItems:'center' },
+  stateText:          { fontSize:18, fontWeight:'600', color:colors.text },
+  ticketCard:         { backgroundColor:colors.surface, padding:25, borderRadius:20, borderWidth:2, borderColor:colors.border, shadowColor:'#000', shadowOffset:{width:0,height:4}, shadowOpacity:0.1, shadowRadius:10, elevation:5 },
 
-  aiBadge:              { backgroundColor:'#EEF0FF', paddingHorizontal:8, paddingVertical:3, borderRadius:8 },
-  aiBadgeText:          { color:'#5856D6', fontSize:11, fontWeight:'800' },
-  aiGearBtn:            { padding:7, backgroundColor:'#EBEBF0', borderRadius:9 },
-  aiKeyNudge:           { backgroundColor:'#EEF0FF', paddingHorizontal:12, paddingVertical:9, borderRadius:9, marginTop:8, marginBottom:2 },
-  aiKeyNudgeText:       { color:'#5856D6', fontSize:12, fontWeight:'600' },
-  aiSummaryBox:         { backgroundColor:'#EEF0FF', padding:12, borderRadius:10, marginTop:10 },
-  aiSummaryText:        { color:'#3730A3', fontSize:13, lineHeight:19, fontWeight:'500' },
-  aiSuggestionChip:     { backgroundColor:'#FFF', borderWidth:1, borderColor:'#C7D2FE', paddingHorizontal:12, paddingVertical:7, borderRadius:16, marginRight:8 },
-  aiSuggestionText:     { color:'#5856D6', fontSize:12, fontWeight:'600' },
-  aiMatchBadge:         { backgroundColor:'#EEF0FF', paddingHorizontal:9, paddingVertical:3, borderRadius:8 },
-  aiMatchBadgeStrong:   { backgroundColor:'#5856D6' },
-  aiMatchBadgeText:     { color:'#5856D6', fontSize:11, fontWeight:'800' },
-  aiMatchDetail:        { backgroundColor:'#F8F7FF', borderWidth:1, borderColor:'#C7D2FE', borderTopWidth:0, borderRadius:12, borderTopLeftRadius:0, borderTopRightRadius:0, padding:14, marginBottom:0 },
-  aiMatchDetailExpanded:{ backgroundColor:'#EEF0FF' },
-  aiMatchDetailTitle:   { fontSize:13, fontWeight:'700', color:'#5856D6' },
-  aiMatchReason:        { color:'#333', fontSize:13, lineHeight:20, marginTop:8 },
-  aiHighlightChip:      { backgroundColor:'#5856D6', paddingHorizontal:10, paddingVertical:5, borderRadius:20 },
+  aiBadge:              { backgroundColor:tint('#EEF0FF'), paddingHorizontal:8, paddingVertical:3, borderRadius:8 },
+  aiBadgeText:          { color:colors.accent, fontSize:11, fontWeight:'800' },
+  aiGearBtn:            { padding:7, backgroundColor:colors.inputBg, borderRadius:9 },
+  aiKeyNudge:           { backgroundColor:tint('#EEF0FF'), paddingHorizontal:12, paddingVertical:9, borderRadius:9, marginTop:8, marginBottom:2 },
+  aiKeyNudgeText:       { color:colors.accent, fontSize:12, fontWeight:'600' },
+  aiSummaryBox:         { backgroundColor:tint('#EEF0FF'), padding:12, borderRadius:10, marginTop:10 },
+  aiSummaryText:        { color:tintText('#3730A3'), fontSize:13, lineHeight:19, fontWeight:'500' },
+  aiSuggestionChip:     { backgroundColor:colors.surface, borderWidth:1, borderColor:colors.border, paddingHorizontal:12, paddingVertical:7, borderRadius:16, marginRight:8 },
+  aiSuggestionText:     { color:colors.accent, fontSize:12, fontWeight:'600' },
+  aiMatchBadge:         { backgroundColor:tint('#EEF0FF'), paddingHorizontal:9, paddingVertical:3, borderRadius:8 },
+  aiMatchBadgeStrong:   { backgroundColor:colors.accent },
+  aiMatchBadgeText:     { color:colors.accent, fontSize:11, fontWeight:'800' },
+  aiMatchDetail:        { backgroundColor:tint('#F8F7FF'), borderWidth:1, borderColor:colors.border, borderTopWidth:0, borderRadius:12, borderTopLeftRadius:0, borderTopRightRadius:0, padding:14, marginBottom:0 },
+  aiMatchDetailExpanded:{ backgroundColor:tint('#EEF0FF') },
+  aiMatchDetailTitle:   { fontSize:13, fontWeight:'700', color:colors.accent },
+  aiMatchReason:        { color:colors.text, fontSize:13, lineHeight:20, marginTop:8 },
+  aiHighlightChip:      { backgroundColor:colors.accent, paddingHorizontal:10, paddingVertical:5, borderRadius:20 },
   aiHighlightText:      { color:'#FFF', fontSize:11, fontWeight:'700' },
-  apiKeyCard:           { backgroundColor:'#FFF', borderRadius:22, padding:24, width:'100%', shadowColor:'#000', shadowOffset:{width:0,height:10}, shadowOpacity:0.18, shadowRadius:24, elevation:12 },
+  apiKeyCard:           { backgroundColor:colors.surface, borderRadius:22, padding:24, width:'100%', shadowColor:'#000', shadowOffset:{width:0,height:10}, shadowOpacity:0.18, shadowRadius:24, elevation:12 },
 
   planPillBtn:          { flexDirection:'row', alignItems:'center', paddingHorizontal:10, paddingVertical:5, borderRadius:10, borderWidth:1, marginTop:5, alignSelf:'flex-start' },
-  proGate:              { backgroundColor:'#FFFAF0', borderWidth:1.5, borderColor:'#FF9500', borderRadius:14, padding:18, marginBottom:14 },
-  proGateTitle:         { fontSize:16, fontWeight:'800', color:'#E65100', marginBottom:5 },
-  proGateSub:           { fontSize:13, color:'#666', lineHeight:18, marginBottom:10 },
-  proGateAction:        { color:'#FF9500', fontWeight:'700', fontSize:13 },
+  proGate:              { backgroundColor:tint('#FFFAF0'), borderWidth:1.5, borderColor:colors.warning, borderRadius:14, padding:18, marginBottom:14 },
+  proGateTitle:         { fontSize:16, fontWeight:'800', color:tintText('#E65100'), marginBottom:5 },
+  proGateSub:           { fontSize:13, color:colors.textMuted, lineHeight:18, marginBottom:10 },
+  proGateAction:        { color:colors.warning, fontWeight:'700', fontSize:13 },
 
   planBadge:              { paddingHorizontal:10, paddingVertical:4, borderRadius:20, borderWidth:1, alignSelf:'flex-start', marginTop:4 },
   planBadgeText:          { fontSize:11, fontWeight:'700' },
-  featuredBadge:          { backgroundColor:'#FF9500', paddingHorizontal:8, paddingVertical:3, borderRadius:6 },
+  featuredBadge:          { backgroundColor:colors.warning, paddingHorizontal:8, paddingVertical:3, borderRadius:6 },
   featuredBadgeText:      { color:'#FFF', fontSize:11, fontWeight:'800' },
-  revenueCard:            { backgroundColor:'#F8F8F8', borderRadius:16, padding:18, marginBottom:14, borderWidth:1, borderColor:'#EEE' },
+  revenueCard:            { backgroundColor:colors.card, borderRadius:16, padding:18, marginBottom:14, borderWidth:1, borderColor:colors.border },
   revenueRow:             { flexDirection:'row' },
   revenueStatBlock:       { flex:1, alignItems:'center', paddingVertical:8 },
-  revenueAmount:          { fontSize:24, fontWeight:'900', color:'#111' },
-  revenueLabel:           { fontSize:11, color:'#888', fontWeight:'600', marginTop:3, textAlign:'center' },
-  subscriptionCard:       { backgroundColor:'#FFF', borderRadius:16, padding:18, marginBottom:14, borderWidth:1, borderColor:'#EEE', shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.06, shadowRadius:8, elevation:3 },
-  premiumGate:            { backgroundColor:'#FFF9EE', borderRadius:16, padding:18, marginTop:8, borderWidth:1.5, borderColor:'#FF9500', alignItems:'center' },
-  premiumGateTitle:       { fontSize:17, fontWeight:'800', color:'#FF9500', marginBottom:6 },
-  premiumGateSub:         { color:'#555', fontSize:13, textAlign:'center', lineHeight:18, marginBottom:14 },
-  premiumGateBtn:         { backgroundColor:'#FF9500', paddingHorizontal:24, paddingVertical:10, borderRadius:20 },
+  revenueAmount:          { fontSize:24, fontWeight:'900', color:colors.text },
+  revenueLabel:           { fontSize:11, color:colors.textMuted, fontWeight:'600', marginTop:3, textAlign:'center' },
+  subscriptionCard:       { backgroundColor:colors.surface, borderRadius:16, padding:18, marginBottom:14, borderWidth:1, borderColor:colors.border, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.06, shadowRadius:8, elevation:3 },
+  premiumGate:            { backgroundColor:tint('#FFF9EE'), borderRadius:16, padding:18, marginTop:8, borderWidth:1.5, borderColor:colors.warning, alignItems:'center' },
+  premiumGateTitle:       { fontSize:17, fontWeight:'800', color:colors.warning, marginBottom:6 },
+  premiumGateSub:         { color:colors.textMuted, fontSize:13, textAlign:'center', lineHeight:18, marginBottom:14 },
+  premiumGateBtn:         { backgroundColor:colors.warning, paddingHorizontal:24, paddingVertical:10, borderRadius:20 },
   premiumGateBtnText:     { color:'#FFF', fontWeight:'800', fontSize:14 },
 
-  brandWebsiteChip:         { backgroundColor:'#EEF0FF', paddingHorizontal:10, paddingVertical:5, borderRadius:10, borderWidth:1, borderColor:'#C7D2FE' },
-  brandWebsiteChipText:     { color:'#5856D6', fontSize:12, fontWeight:'700' },
-  brandNotFoundRow:         { flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginTop:10, paddingTop:10, borderTopWidth:1, borderTopColor:'#EEE' },
-  brandNotFoundText:        { color:'#5856D6', fontSize:12, fontWeight:'600', flex:1 },
-  brandNotFoundFooter:      { flexDirection:'row', alignItems:'center', backgroundColor:'#EEF0FF', padding:18, borderRadius:16, marginTop:8, marginBottom:20, borderWidth:1, borderColor:'#C7D2FE' },
-  brandNotFoundFooterTitle: { fontSize:16, fontWeight:'800', color:'#3730A3', marginBottom:4 },
-  brandNotFoundFooterSub:   { fontSize:13, color:'#555' },
+  brandWebsiteChip:         { backgroundColor:tint('#EEF0FF'), paddingHorizontal:10, paddingVertical:5, borderRadius:10, borderWidth:1, borderColor:colors.border },
+  brandWebsiteChipText:     { color:colors.accent, fontSize:12, fontWeight:'700' },
+  brandNotFoundRow:         { flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginTop:10, paddingTop:10, borderTopWidth:1, borderTopColor:colors.border },
+  brandNotFoundText:        { color:colors.accent, fontSize:12, fontWeight:'600', flex:1 },
+  brandNotFoundFooter:      { flexDirection:'row', alignItems:'center', backgroundColor:tint('#EEF0FF'), padding:18, borderRadius:16, marginTop:8, marginBottom:20, borderWidth:1, borderColor:colors.border },
+  brandNotFoundFooterTitle: { fontSize:16, fontWeight:'800', color:tintText('#3730A3'), marginBottom:4 },
+  brandNotFoundFooterSub:   { fontSize:13, color:colors.textMuted },
 
-  equipSearchBar:   { flexDirection:'row', alignItems:'center', backgroundColor:'#F0F0F0', borderRadius:14, paddingLeft:16, paddingRight:6, paddingVertical:6, borderWidth:1, borderColor:'#E0E0E0' },
-  equipSearchInput: { flex:1, fontSize:15, color:'#111', paddingVertical:8 },
-  equipSearchBtn:   { backgroundColor:'#5856D6', width:42, height:42, borderRadius:10, justifyContent:'center', alignItems:'center' },
-  equipSearchCard:  { backgroundColor:'#F8F8F8', borderRadius:16, padding:16, marginBottom:14, borderWidth:1, borderColor:'#EEE' },
+  equipSearchBar:   { flexDirection:'row', alignItems:'center', backgroundColor:colors.inputBg, borderRadius:14, paddingLeft:16, paddingRight:6, paddingVertical:6, borderWidth:1, borderColor:colors.border },
+  equipSearchInput: { flex:1, fontSize:15, color:colors.text, paddingVertical:8 },
+  equipSearchBtn:   { backgroundColor:colors.accent, width:42, height:42, borderRadius:10, justifyContent:'center', alignItems:'center' },
+  equipSearchCard:  { backgroundColor:colors.card, borderRadius:16, padding:16, marginBottom:14, borderWidth:1, borderColor:colors.border },
 
-  equipAiCard:          { backgroundColor:'#F8F7FF', borderWidth:1.5, borderColor:'#C7D2FE', borderRadius:18, padding:18, marginBottom:10 },
-  equipAiTitle:         { fontSize:17, fontWeight:'800', color:'#3730A3' },
-  equipAiSubtitle:      { fontSize:13, color:'#555', marginTop:6, lineHeight:18 },
-  equipAiBtn:           { backgroundColor:'#5856D6', paddingVertical:14, borderRadius:12, alignItems:'center', justifyContent:'center' },
-  equipAiBtnDisabled:   { backgroundColor:'#BDBDBD' },
+  equipAiCard:          { backgroundColor:tint('#F8F7FF'), borderWidth:1.5, borderColor:colors.border, borderRadius:18, padding:18, marginBottom:10 },
+  equipAiTitle:         { fontSize:17, fontWeight:'800', color:tintText('#3730A3') },
+  equipAiSubtitle:      { fontSize:13, color:colors.textMuted, marginTop:6, lineHeight:18 },
+  equipAiBtn:           { backgroundColor:colors.accent, paddingVertical:14, borderRadius:12, alignItems:'center', justifyContent:'center' },
+  equipAiBtnDisabled:   { backgroundColor:colors.border },
   equipAiBtnIcon:       { fontSize:22, marginBottom:4 },
   equipAiBtnText:       { color:'#FFF', fontWeight:'700', fontSize:14 },
-  equipAiLoading:       { flexDirection:'row', alignItems:'center', backgroundColor:'#EEF0FF', padding:14, borderRadius:12, marginTop:14 },
-  equipAiError:         { backgroundColor:'#FFEBEE', padding:14, borderRadius:12, marginTop:14 },
-  equipAiResults:       { backgroundColor:'#FFF', borderRadius:14, padding:16, marginTop:14, borderWidth:1, borderColor:'#C7D2FE' },
-  equipAiResultName:    { fontSize:15, fontWeight:'800', color:'#1A1A2E', flex:1, marginRight:8 },
+  equipAiLoading:       { flexDirection:'row', alignItems:'center', backgroundColor:tint('#EEF0FF'), padding:14, borderRadius:12, marginTop:14 },
+  equipAiError:         { backgroundColor:tint('#FFEBEE'), padding:14, borderRadius:12, marginTop:14 },
+  equipAiResults:       { backgroundColor:colors.surface, borderRadius:14, padding:16, marginTop:14, borderWidth:1, borderColor:colors.border },
+  equipAiResultName:    { fontSize:15, fontWeight:'800', color:colors.text, flex:1, marginRight:8 },
   equipAiConfBadge:     { paddingHorizontal:8, paddingVertical:4, borderRadius:6 },
-  equipAiWorkout:       { flexDirection:'row', alignItems:'flex-start', backgroundColor:'#F8F7FF', padding:10, borderRadius:10, marginBottom:8 },
+  equipAiWorkout:       { flexDirection:'row', alignItems:'flex-start', backgroundColor:tint('#F8F7FF'), padding:10, borderRadius:10, marginBottom:8 },
 
-  workoutCard:          { backgroundColor:'#F0EDFF', borderRadius:12, padding:14, marginBottom:10, borderLeftWidth:3, borderLeftColor:'#5856D6' },
-  workoutCardTitle:     { fontSize:14, fontWeight:'800', color:'#3730A3', marginBottom:4 },
-  workoutCardDesc:      { fontSize:13, color:'#444', lineHeight:19 },
-});
+  workoutCard:          { backgroundColor:tint('#F0EDFF'), borderRadius:12, padding:14, marginBottom:10, borderLeftWidth:3, borderLeftColor:colors.accent },
+  workoutCardTitle:     { fontSize:14, fontWeight:'800', color:tintText('#3730A3'), marginBottom:4 },
+  workoutCardDesc:      { fontSize:13, color:colors.text, lineHeight:19 },
+  });
+}

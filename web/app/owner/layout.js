@@ -12,10 +12,10 @@ export default function OwnerLayout({ children }) {
   const router = useRouter();
   const [owner, setOwner] = useState(null);
   const [checked, setChecked] = useState(false);
-  const isLoginPage = pathname === '/owner/login';
+  const isPublicRoute = pathname === '/owner/login' || pathname.startsWith('/owner/claim/');
 
   useEffect(() => {
-    if (isLoginPage) { setChecked(true); return; }
+    if (isPublicRoute) { setChecked(true); return; }
     const session = getOwnerSession();
     if (!session) {
       router.replace('/owner/login');
@@ -23,9 +23,9 @@ export default function OwnerLayout({ children }) {
     }
     setOwner(session);
     setChecked(true);
-  }, [isLoginPage, router]);
+  }, [isPublicRoute, router]);
 
-  if (isLoginPage) return children;
+  if (isPublicRoute) return children;
 
   if (!checked || !owner) {
     return <div className="max-w-6xl mx-auto px-6 py-20 text-center text-gray-400">Loading owner console...</div>;

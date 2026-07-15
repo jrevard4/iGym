@@ -13,7 +13,8 @@
   },
   "jest": {
     "preset": "jest-expo",
-    "testPathIgnorePatterns": ["/node_modules/", "/web/", "/server/"]
+    "testPathIgnorePatterns": ["/node_modules/", "/web/", "/server/"],
+    "setupFiles": ["<rootDir>/jest.setup.js"]
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "1.23.1",

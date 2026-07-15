@@ -35,33 +35,33 @@ export default function OwnerLoginPage() {
 
   return (
     <div className="max-w-md mx-auto px-6 py-16">
-      <Link href="/" className="text-sm font-semibold text-gray-500 hover:text-brand transition">← Back to iGym</Link>
+      <Link href="/" className="text-sm font-semibold text-gray-500 dark:text-gray-500 hover:text-brand transition">← Back to iGym</Link>
       <h1 className="text-4xl font-black mb-2 mt-4">Gym Owner Portal</h1>
-      <p className="text-gray-600 mb-8">Manage your facility, inventory, and members.</p>
+      <p className="text-gray-600 dark:text-gray-400 mb-8">Manage your facility, inventory, and members.</p>
 
       <form onSubmit={submit} className="space-y-4">
         <label className="block">
-          <span className="text-sm font-semibold text-gray-700">Management ID</span>
+          <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">Management ID</span>
           <input
             type="text"
             autoCapitalize="none"
             value={ownerID}
             onChange={(e) => setOwnerID(e.target.value)}
-            className="mt-1 w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
+            className="mt-1 w-full px-4 py-3 border border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 rounded-lg focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
           />
         </label>
         <label className="block">
-          <span className="text-sm font-semibold text-gray-700">Password</span>
+          <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">Password</span>
           <input
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="mt-1 w-full px-4 py-3 border border-gray-300 rounded-lg focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
+            className="mt-1 w-full px-4 py-3 border border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 rounded-lg focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
           />
         </label>
 
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+          <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-900 text-red-700 dark:text-red-400 px-4 py-3 rounded-lg text-sm">
             {error}
           </div>
         )}
@@ -75,10 +75,10 @@ export default function OwnerLoginPage() {
         </button>
       </form>
 
-      <div className="mt-10 p-4 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-500">
-        <strong className="text-gray-700">Demo accounts:</strong> <code className="bg-white px-1.5 py-0.5 rounded border">owner</code> / <code className="bg-white px-1.5 py-0.5 rounded border">123</code> (Iron Paradise), <code className="bg-white px-1.5 py-0.5 rounded border">zenowner</code> / <code className="bg-white px-1.5 py-0.5 rounded border">123</code> (Zen Wellness)
+      <div className="mt-10 p-4 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl text-xs text-gray-500 dark:text-gray-500">
+        <strong className="text-gray-700 dark:text-gray-300">Demo accounts:</strong> <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">owner</code> / <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">123</code> (Iron Paradise), <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">zenowner</code> / <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">123</code> (Zen Wellness)
       </div>
-      <p className="mt-4 text-sm text-gray-500">
+      <p className="mt-4 text-sm text-gray-500 dark:text-gray-500">
         New gym owner? Register your business from the iGym mobile app for now.
       </p>
     </div>

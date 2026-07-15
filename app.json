@@ -3,9 +3,10 @@
     "name": "iGym",
     "slug": "igym",
     "version": "1.0.0",
+    "scheme": "igym",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash.png",
@@ -59,7 +60,7 @@
         "@stripe/stripe-react-native",
         {
           "merchantIdentifier": "merchant.com.igym.app",
-          "enableGooglePay": false
+          "enableGooglePay": true
         }
       ],
       [

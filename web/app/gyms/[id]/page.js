@@ -1,4 +1,5 @@
 import { loadGyms } from '../../../../lib/supabase';
+import { getAvgRating } from '../../../../lib/helpers';
 import GymDetailClient from './GymDetailClient';
 
 async function findGym(id) {
@@ -24,8 +25,45 @@ export async function generateMetadata({ params }) {
   };
 }
 
+function buildStructuredData(gym) {
+  const avg = getAvgRating(gym.gymReviews);
+  const data = {
+    '@context': 'https://schema.org',
+    '@type': 'ExerciseGym',
+    name: gym.gymName,
+    ...(gym.description && { description: gym.description }),
+    ...(gym.location && { address: gym.location }),
+    ...(gym.phone && { telephone: gym.phone }),
+    ...(gym.website && { url: gym.website }),
+    ...(gym.pricing && { priceRange: gym.pricing }),
+    ...(gym.branding?.heroImageUrl && { image: gym.branding.heroImageUrl }),
+    ...(gym.lat && gym.lon && {
+      geo: { '@type': 'GeoCoordinates', latitude: gym.lat, longitude: gym.lon },
+    }),
+    ...(avg > 0 && (gym.gymReviews || []).length > 0 && {
+      aggregateRating: {
+        '@type': 'AggregateRating',
+        ratingValue: avg.toFixed(1),
+        reviewCount: gym.gymReviews.length,
+      },
+    }),
+  };
+  return JSON.stringify(data);
+}
+
 export default async function GymDetailPage({ params }) {
   const { id } = await params;
   const gym = await findGym(id);
-  return <GymDetailClient gym={gym} />;
+  return (
+    <>
+      {gym && (
+        <script
+          type="application/ld+json"
+          // eslint-disable-next-line react/no-danger
+          dangerouslySetInnerHTML={{ __html: buildStructuredData(gym) }}
+        />
+      )}
+      <GymDetailClient gym={gym} />
+    </>
+  );
 }

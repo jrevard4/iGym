@@ -1,13 +1,19 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 import { loadGyms, incrementMatchImpressions, upsertUser } from '../../../lib/supabase';
 import { getDistanceMiles, getAvgRating, isOpenNow, runLocalMatch } from '../../../lib/helpers';
-import { CLASS_TYPES, EQUIP_CATEGORIES, DEFAULT_LOCATION } from '../../../lib/constants';
+import { CLASS_TYPES, EQUIP_CATEGORIES, AMENITIES, DEFAULT_LOCATION } from '../../../lib/constants';
 import { getSession, setSession } from '@/lib/auth';
+import { useT } from '@/lib/PreferencesContext';
 import GymCard from '@/components/GymCard';
 
+// Leaflet touches `window` at import time — must be client-only, no SSR.
+const GymMap = dynamic(() => import('@/components/GymMap'), { ssr: false });
+
 export default function GymsListPage() {
+  const t = useT();
   const [gyms, setGyms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState('');
@@ -17,9 +23,12 @@ export default function GymsListPage() {
   const [classFilter, setClassFilter] = useState('All');
   const [equipCategory, setEquipCategory] = useState('All');
   const [targetMuscle, setTargetMuscle] = useState('');
+  const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [openNowOnly, setOpenNowOnly] = useState(false);
   const [sortBy, setSortBy] = useState('DISTANCE');
+  const [selectedAmenities, setSelectedAmenities] = useState([]);
+  const [viewMode, setViewMode] = useState('LIST');
 
   // AI matchmaker
   const [aiPrompt, setAiPrompt] = useState('');
@@ -67,8 +76,10 @@ export default function GymsListPage() {
         if (!text.includes(q)) return false;
       }
       if (classFilter !== 'All' && !(g.classes || []).includes(classFilter)) return false;
+      if (minPrice && g.monthlyPrice < Number(minPrice)) return false;
       if (maxPrice && g.monthlyPrice > Number(maxPrice)) return false;
       if (openNowOnly && isOpenNow(g) === false) return false;
+      if (selectedAmenities.length > 0 && !selectedAmenities.every((a) => (g.amenities || []).includes(a))) return false;
       if (equipCategory !== 'All' || targetMuscle) {
         const hasMatch = (g.equipment || []).some((eq) => {
           if (equipCategory !== 'All' && eq.category !== equipCategory) return false;
@@ -98,7 +109,11 @@ export default function GymsListPage() {
     });
 
     return list;
-  }, [gyms, query, classFilter, equipCategory, targetMuscle, maxPrice, openNowOnly, sortBy, userLoc, aiMatches]);
+  }, [gyms, query, classFilter, equipCategory, targetMuscle, minPrice, maxPrice, openNowOnly, selectedAmenities, sortBy, userLoc, aiMatches]);
+
+  const toggleAmenity = (a) => {
+    setSelectedAmenities((prev) => prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]);
+  };
 
   const saveRecentSearch = (prompt) => {
     const session = getSession();
@@ -162,16 +177,16 @@ export default function GymsListPage() {
 
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
-      <h1 className="text-4xl font-black mb-2">Find a Gym</h1>
-      <p className="text-gray-600 mb-8">
-        {loading ? 'Loading...' : `${filtered.length} ${filtered.length === 1 ? 'gym' : 'gyms'} found near you`}
+      <h1 className="text-4xl font-black mb-2">{t('findGymTitle')}</h1>
+      <p className="text-gray-600 dark:text-gray-400 mb-8">
+        {loading ? 'Loading...' : `${filtered.length} ${filtered.length === 1 ? t('gymFound') : t('gymsFound')}`}
       </p>
 
       {/* ── AI matchmaker ────────────────────────────────────────────── */}
       <div className="bg-gradient-to-br from-violet-600 to-brand rounded-2xl p-5 mb-6 shadow-sm">
         <div className="flex items-center gap-2 mb-3 text-white">
-          <span className="text-xl">✨</span>
-          <h2 className="font-bold">AI Matchmaker — tell us your goal</h2>
+          <span className="text-xl" aria-hidden="true">✨</span>
+          <h2 className="font-bold">{t('aiMatchmakerTitle')}</h2>
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
           <input
@@ -179,7 +194,8 @@ export default function GymsListPage() {
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && runAISearch()}
-            placeholder='e.g. "build leg strength for sprinting, budget under $50/mo"'
+            placeholder={t('aiMatchmakerPlaceholder')}
+            aria-label={t('aiMatchmakerTitle')}
             className="flex-1 px-4 py-3 rounded-lg border-0 outline-none focus:ring-2 focus:ring-white/50"
           />
           <button
@@ -187,14 +203,14 @@ export default function GymsListPage() {
             disabled={isAiSearching || !aiPrompt.trim()}
             className="bg-white text-brand font-bold px-6 py-3 rounded-lg hover:bg-white/90 transition disabled:opacity-60 shrink-0"
           >
-            {isAiSearching ? 'Searching...' : 'Find my gym'}
+            {isAiSearching ? t('searching') : t('findMyGym')}
           </button>
           {aiMatches && (
             <button
               onClick={clearAISearch}
               className="bg-white/15 text-white font-semibold px-4 py-3 rounded-lg hover:bg-white/25 transition shrink-0"
             >
-              Clear
+              {t('clear')}
             </button>
           )}
         </div>
@@ -237,47 +253,77 @@ export default function GymsListPage() {
       </div>
 
       {/* ── Filter bar ────────────────────────────────────────────────── */}
-      <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-8 sticky top-[73px] z-30 shadow-sm">
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 mb-8 sticky top-[73px] z-30 shadow-sm">
         <input
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by name, location, or description..."
-          className="w-full px-4 py-3 border border-gray-300 rounded-lg mb-4 focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
+          placeholder={t('searchPlaceholder')}
+          aria-label={t('searchPlaceholder')}
+          className="w-full px-4 py-3 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg mb-4 focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
         />
 
-        <div className="grid sm:grid-cols-3 gap-3 mb-3">
+        <div className="grid sm:grid-cols-4 gap-3 mb-3">
           <select
             value={classFilter}
             onChange={(e) => setClassFilter(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg bg-white"
+            aria-label={t('allClasses')}
+            className="px-4 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg bg-white"
           >
-            <option value="All">All classes</option>
+            <option value="All">{t('allClasses')}</option>
             {CLASS_TYPES.map((c) => <option key={c}>{c}</option>)}
           </select>
           <input
             type="number"
-            placeholder="Max monthly $"
+            placeholder={t('minMonthly')}
+            aria-label={t('minMonthly')}
+            value={minPrice}
+            onChange={(e) => setMinPrice(e.target.value)}
+            className="px-4 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg"
+          />
+          <input
+            type="number"
+            placeholder={t('maxMonthly')}
+            aria-label={t('maxMonthly')}
             value={maxPrice}
             onChange={(e) => setMaxPrice(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg"
+            className="px-4 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg"
           />
           <select
             value={sortBy}
             onChange={(e) => setSortBy(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg bg-white"
+            aria-label="Sort by"
+            className="px-4 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg bg-white"
           >
-            <option value="DISTANCE">📍 Nearest first</option>
-            <option value="RATING">⭐ Top rated</option>
-            <option value="PRICE">💲 Cheapest first</option>
+            <option value="DISTANCE">📍 {t('nearestFirst')}</option>
+            <option value="RATING">⭐ {t('topRated')}</option>
+            <option value="PRICE">💲 {t('cheapestFirst')}</option>
           </select>
+        </div>
+
+        <div className="flex flex-wrap gap-2 mb-3" role="group" aria-label="Filter by amenities">
+          {AMENITIES.map((a) => {
+            const active = selectedAmenities.includes(a);
+            return (
+              <button
+                type="button"
+                key={a}
+                onClick={() => toggleAmenity(a)}
+                aria-pressed={active}
+                className={'px-3 py-1.5 rounded-full text-xs font-semibold transition ' + (active ? 'bg-brand text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700')}
+              >
+                {a}
+              </button>
+            );
+          })}
         </div>
 
         <div className="grid sm:grid-cols-2 gap-3 mb-3">
           <select
             value={equipCategory}
             onChange={(e) => setEquipCategory(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg bg-white"
+            aria-label="Filter by equipment category"
+            className="px-4 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg bg-white"
           >
             <option value="All">Any equipment category</option>
             {EQUIP_CATEGORIES.map((c) => <option key={c}>{c}</option>)}
@@ -285,20 +331,21 @@ export default function GymsListPage() {
           <input
             type="text"
             placeholder="Target muscle (e.g. Chest, Quads)"
+            aria-label="Filter by target muscle"
             value={targetMuscle}
             onChange={(e) => setTargetMuscle(e.target.value)}
-            className="px-4 py-2.5 border border-gray-300 rounded-lg"
+            className="px-4 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg"
           />
         </div>
 
-        <label className="inline-flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+        <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
           <input
             type="checkbox"
             checked={openNowOnly}
             onChange={(e) => setOpenNowOnly(e.target.checked)}
             className="w-4 h-4 accent-brand"
           />
-          Show only gyms open right now
+          {t('openNowOnly')}
         </label>
       </div>
 
@@ -309,22 +356,43 @@ export default function GymsListPage() {
         </div>
       )}
 
+      {!loading && filtered.length > 0 && (
+        <div className="flex justify-end gap-2 mb-4" role="group" aria-label="Switch between list and map view">
+          <button
+            onClick={() => setViewMode('LIST')}
+            aria-pressed={viewMode === 'LIST'}
+            className={'px-3 py-1.5 rounded-lg text-sm font-semibold transition ' + (viewMode === 'LIST' ? 'bg-brand text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700')}
+          >
+            ☰ {t('list')}
+          </button>
+          <button
+            onClick={() => setViewMode('MAP')}
+            aria-pressed={viewMode === 'MAP'}
+            className={'px-3 py-1.5 rounded-lg text-sm font-semibold transition ' + (viewMode === 'MAP' ? 'bg-brand text-white' : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700')}
+          >
+            🗺️ {t('map')}
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {[...Array(6)].map((_, i) => (
-            <div key={i} className="bg-white border border-gray-200 rounded-2xl p-5 animate-pulse">
-              <div className="h-5 bg-gray-200 rounded w-3/4 mb-3" />
-              <div className="h-4 bg-gray-100 rounded w-1/2 mb-4" />
-              <div className="h-3 bg-gray-100 rounded w-full" />
+            <div key={i} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 animate-pulse">
+              <div className="h-5 bg-gray-200 dark:bg-gray-700 rounded w-3/4 mb-3" />
+              <div className="h-4 bg-gray-100 dark:bg-gray-800 rounded w-1/2 mb-4" />
+              <div className="h-3 bg-gray-100 dark:bg-gray-800 rounded w-full" />
             </div>
           ))}
         </div>
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
-          <div className="text-5xl mb-4">🔍</div>
-          <h2 className="text-xl font-bold mb-2">No gyms match your filters</h2>
-          <p className="text-gray-600">Try widening your search or clearing a filter.</p>
+          <div className="text-5xl mb-4" aria-hidden="true">🔍</div>
+          <h2 className="text-xl font-bold mb-2">{t('noGymsMatch')}</h2>
+          <p className="text-gray-600 dark:text-gray-400">{t('tryWidening')}</p>
         </div>
+      ) : viewMode === 'MAP' ? (
+        <GymMap gyms={filtered} userLoc={userLoc} />
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {filtered.map((gym) => (
