@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { GLOBAL_EQUIPMENT_DATABASE } from '../../../../../lib/equipment-db';
@@ -35,16 +35,16 @@ export default function SupplierRepositoryPage() {
                 <button onClick={() => setSelectedBrand(brand)} className="text-left w-full">
                   <div className="flex justify-between items-start mb-2">
                     <span className="font-bold text-lg text-gray-900 dark:text-gray-100">{brand}</span>
-                    <span className="bg-brand/10 text-brand text-xs font-bold px-2 py-1 rounded shrink-0">{count} items</span>
+                    <span className="bg-brand/10 text-brand-text text-xs font-bold px-2 py-1 rounded shrink-0">{count} items</span>
                   </div>
-                  <span className="text-brand text-sm font-semibold">Browse in portal →</span>
+                  <span className="text-brand-text text-sm font-semibold">Browse in portal →</span>
                 </button>
                 {site && (
                   <a
                     href={site.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block mt-3 text-xs font-semibold text-gray-500 dark:text-gray-500 hover:text-brand transition"
+                    className="block mt-3 text-xs font-semibold text-gray-500 dark:text-gray-500 hover:text-brand-text transition"
                   >
                     🌐 Visit website ↗
                   </a>
@@ -59,7 +59,7 @@ export default function SupplierRepositoryPage() {
 
   return (
     <div>
-      <button onClick={() => setSelectedBrand(null)} className="text-brand hover:underline text-sm font-semibold mb-4 block">
+      <button onClick={() => setSelectedBrand(null)} className="text-brand-text hover:underline text-sm font-semibold mb-4 block">
         ← All brands
       </button>
       <div className="flex justify-between items-start mb-8 flex-wrap gap-2">
@@ -91,7 +91,7 @@ export default function SupplierRepositoryPage() {
               <div className="p-4">
                 <div className="flex justify-between items-start gap-2 mb-1">
                   <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{item.name}</div>
-                  <span className="bg-brand/10 text-brand text-xs font-bold px-2 py-0.5 rounded shrink-0">{item.category}</span>
+                  <span className="bg-brand/10 text-brand-text text-xs font-bold px-2 py-0.5 rounded shrink-0">{item.category}</span>
                 </div>
                 <div className="text-xs text-gray-600 dark:text-gray-400 mb-3">Target: {item.targetArea}</div>
                 <button

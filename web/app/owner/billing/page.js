@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
@@ -87,7 +87,7 @@ function OwnerBillingPageInner() {
     return (
       <div className="max-w-md mx-auto py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Unknown plan</h1>
-        <Link href="/owner/analytics" className="text-brand hover:underline">← Back to Analytics</Link>
+        <Link href="/owner/analytics" className="text-brand-text hover:underline">← Back to Analytics</Link>
       </div>
     );
   }
@@ -110,7 +110,7 @@ function OwnerBillingPageInner() {
 
   return (
     <div className="max-w-md mx-auto py-12">
-      <Link href="/owner/analytics" className="text-brand hover:underline text-sm font-semibold">
+      <Link href="/owner/analytics" className="text-brand-text hover:underline text-sm font-semibold">
         ← Back to Analytics
       </Link>
 

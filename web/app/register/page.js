@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -104,7 +104,7 @@ function RegisterForm() {
 
       <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
         Already have one?{' '}
-        <Link href="/login" className="text-brand hover:underline font-semibold">Sign in</Link>
+        <Link href="/login" className="text-brand-text hover:underline font-semibold">Sign in</Link>
       </p>
     </div>
   );

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -82,7 +82,7 @@ export default function OwnerAnalyticsPage() {
         <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">⭐ Subscription & placement</h2>
         <div className="flex justify-between items-center mb-4">
           <span className="font-bold" style={{ color: plan.color }}>{plan.emoji} {plan.name} Plan</span>
-          <span className="text-brand font-bold">${plan.price}/mo</span>
+          <span className="text-brand-text font-bold">${plan.price}/mo</span>
         </div>
         <div className="flex gap-2 mb-4">
           {Object.keys(PLAN_TIERS).filter((k) => k !== owner.plan).map((k) => {
@@ -110,7 +110,7 @@ export default function OwnerAnalyticsPage() {
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
         <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">Facility overview</h2>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          <Stat label="Equipment" value={(owner.equipment || []).length} color="text-brand" />
+          <Stat label="Equipment" value={(owner.equipment || []).length} color="text-brand-text" />
           <Stat label="Pass tiers" value={(owner.passes || []).length} color="text-success" />
           <Stat label="Trainers" value={(owner.trainers || []).length} color="text-warning" />
           <Stat label="Classes" value={(owner.classes || []).length} color="text-accent" />

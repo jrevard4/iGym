@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -35,7 +35,7 @@ export default function OwnerLoginPage() {
 
   return (
     <div className="max-w-md mx-auto px-6 py-16">
-      <Link href="/" className="text-sm font-semibold text-gray-500 dark:text-gray-500 hover:text-brand transition">← Back to iGym</Link>
+      <Link href="/" className="text-sm font-semibold text-gray-500 dark:text-gray-500 hover:text-brand-text transition">← Back to iGym</Link>
       <h1 className="text-4xl font-black mb-2 mt-4">Gym Owner Portal</h1>
       <p className="text-gray-600 dark:text-gray-400 mb-8">Manage your facility, inventory, and members.</p>
 

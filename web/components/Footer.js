@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useT } from '@/lib/PreferencesContext';
 
@@ -10,7 +10,7 @@ export default function Footer() {
       <div className="max-w-6xl mx-auto px-6 py-10 grid sm:grid-cols-3 gap-8 text-sm">
         <div>
           <div className="text-xl font-black mb-2">
-            <span className="text-brand">i</span>Gym
+            <span className="text-brand-text">i</span>Gym
           </div>
           <p className="text-gray-600 dark:text-gray-400 leading-relaxed">
             Finding the right gym, for you.
@@ -20,16 +20,16 @@ export default function Footer() {
         <div>
           <div className="font-semibold mb-3 text-gray-900 dark:text-gray-100">For Members</div>
           <ul className="space-y-2 text-gray-600 dark:text-gray-400">
-            <li><a href="/gyms" className="hover:text-brand">{t('findGym')}</a></li>
-            <li><a href="/register" className="hover:text-brand">Create Account</a></li>
-            <li><a href="/wallet" className="hover:text-brand">{t('wallet')}</a></li>
+            <li><a href="/gyms" className="hover:text-brand-text">{t('findGym')}</a></li>
+            <li><a href="/register" className="hover:text-brand-text">Create Account</a></li>
+            <li><a href="/wallet" className="hover:text-brand-text">{t('wallet')}</a></li>
           </ul>
         </div>
 
         <div>
           <div className="font-semibold mb-3 text-gray-900 dark:text-gray-100">{t('forGymOwners')}</div>
           <ul className="space-y-2 text-gray-600 dark:text-gray-400">
-            <li><a href="/owner/login" className="hover:text-brand">Owner Portal →</a></li>
+            <li><a href="/owner/login" className="hover:text-brand-text">Owner Portal →</a></li>
             <li>AI photo tools still live in the iGym mobile app</li>
           </ul>
         </div>

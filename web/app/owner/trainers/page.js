@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { uniqueId } from '../../../../lib/helpers';
@@ -85,7 +85,7 @@ export default function OwnerTrainersPage() {
                     <span className="text-success text-xs font-bold">✓ Confirmed</span>
                   )}
                 </div>
-                <div className="text-brand text-xs font-semibold mt-1">{req.trainerName}</div>
+                <div className="text-brand-text text-xs font-semibold mt-1">{req.trainerName}</div>
                 <div className="text-gray-600 dark:text-gray-400 text-sm mt-1">{req.message}</div>
                 <div className="text-gray-400 dark:text-gray-600 text-xs mt-2">{new Date(req.requestedAt).toLocaleString()}</div>
               </div>

@@ -11,6 +11,10 @@ module.exports = {
         brand: {
           DEFAULT: '#007AFF',
           dark:    '#0051D5',
+          // #007AFF fails WCAG AA contrast (4.09:1) as normal-weight text on
+          // white — reuses the already-defined "dark" shade (~6.77:1) for
+          // any text-colored usage instead of the background/button shade.
+          text:    '#0051D5',
         },
         accent:   '#5856D6',
         success:  '#34C759',

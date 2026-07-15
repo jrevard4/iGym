@@ -1,4 +1,4 @@
-import Link from 'next/link';
+﻿import Link from 'next/link';
 
 export default function HomePage() {
   return (
@@ -16,7 +16,7 @@ export default function HomePage() {
           <h1 className="text-5xl sm:text-7xl font-black tracking-tight leading-tight">
             Finding the right gym,
             <br />
-            <span className="text-brand">for you.</span>
+            <span className="text-brand-text">for you.</span>
           </h1>
           <p className="mt-6 text-xl text-gray-200 max-w-xl">
             Compare local gyms by equipment, price, classes, and reviews. Buy a day-pass in 30 seconds and check in by QR.
