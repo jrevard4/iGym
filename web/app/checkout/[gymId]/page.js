@@ -138,7 +138,7 @@ function CheckoutPageInner() {
     return (
       <div className="max-w-md mx-auto px-6 py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Gym not found</h1>
-        <Link href="/gyms" className="text-brand hover:underline">← Back to all gyms</Link>
+        <Link href="/gyms" className="text-brand-text hover:underline">← Back to all gyms</Link>
       </div>
     );
   }
@@ -148,7 +148,7 @@ function CheckoutPageInner() {
       <div className="max-w-md mx-auto px-6 py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Invalid pass</h1>
         <p className="text-gray-600 mb-4">This pass couldn&apos;t be checked out. Please go back and pick a pass again.</p>
-        <Link href={`/gyms/${gym.id}`} className="text-brand hover:underline">← Back to {gym.gymName}</Link>
+        <Link href={`/gyms/${gym.id}`} className="text-brand-text hover:underline">← Back to {gym.gymName}</Link>
       </div>
     );
   }
@@ -179,7 +179,7 @@ function CheckoutPageInner() {
 
   return (
     <div className="max-w-md mx-auto px-6 py-12">
-      <Link href={`/gyms/${gym.id}`} className="text-brand hover:underline text-sm font-semibold">
+      <Link href={`/gyms/${gym.id}`} className="text-brand-text hover:underline text-sm font-semibold">
         ← Back to {gym.gymName}
       </Link>
 
