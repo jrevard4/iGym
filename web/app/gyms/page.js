@@ -201,7 +201,7 @@ export default function GymsListPage() {
           <button
             onClick={() => runAISearch()}
             disabled={isAiSearching || !aiPrompt.trim()}
-            className="bg-white text-brand-text font-bold px-6 py-3 rounded-lg hover:bg-white/90 transition disabled:opacity-60 shrink-0"
+            className="bg-white text-brand-text dark:text-blue-400 font-bold px-6 py-3 rounded-lg hover:bg-white/90 transition disabled:opacity-60 shrink-0"
           >
             {isAiSearching ? t('searching') : t('findMyGym')}
           </button>

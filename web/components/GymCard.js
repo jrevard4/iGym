@@ -26,21 +26,21 @@ export default function GymCard({ gym, distanceMi, match }) {
             </span>
           )}
           {gym.ownerID && (
-            <span className="bg-blue-50 dark:bg-blue-950 text-brand-text text-xs font-extrabold px-2 py-1 rounded shrink-0">
+            <span className="bg-blue-50 dark:bg-blue-950 text-brand-text dark:text-blue-400 text-xs font-extrabold px-2 py-1 rounded shrink-0">
               ✓ VERIFIED
             </span>
           )}
           <h3 className="text-lg font-bold truncate text-gray-900 dark:text-gray-100">{gym.gymName}</h3>
         </div>
         {typeof distanceMi === 'number' && (
-          <span className="text-brand-text font-bold shrink-0">{distanceMi.toFixed(1)} mi</span>
+          <span className="text-brand-text dark:text-blue-400 font-bold shrink-0">{distanceMi.toFixed(1)} mi</span>
         )}
       </div>
 
       <p className="text-sm text-gray-600 dark:text-gray-400 mb-3 truncate">{gym.location}</p>
 
       {promo && (
-        <div className="bg-brand/10 text-brand-text text-xs font-bold px-2.5 py-1.5 rounded-lg mb-3">
+        <div className="bg-brand/10 text-brand-text dark:text-blue-400 text-xs font-bold px-2.5 py-1.5 rounded-lg mb-3">
           🔥 {promo.title}
         </div>
       )}
@@ -49,6 +49,15 @@ export default function GymCard({ gym, distanceMi, match }) {
         <div className="bg-violet-50 dark:bg-violet-950 text-violet-700 dark:text-violet-300 text-xs rounded-lg px-2.5 py-1.5 mb-3">
           <span className="font-bold">✨ {match.score}% match</span>
           {match.reason && <p className="mt-0.5 text-violet-600 dark:text-violet-400 line-clamp-2">{match.reason}</p>}
+          {(match.highlights || []).length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-1.5">
+              {match.highlights.slice(0, 3).map((h, i) => (
+                <span key={i} className="bg-white/70 dark:bg-black/20 text-violet-700 dark:text-violet-300 text-[11px] font-semibold px-1.5 py-0.5 rounded">
+                  {h}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

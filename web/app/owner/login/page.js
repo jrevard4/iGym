@@ -35,7 +35,7 @@ export default function OwnerLoginPage() {
 
   return (
     <div className="max-w-md mx-auto px-6 py-16">
-      <Link href="/" className="text-sm font-semibold text-gray-500 dark:text-gray-500 hover:text-brand-text transition">← Back to iGym</Link>
+      <Link href="/" className="text-sm font-semibold text-gray-500 dark:text-gray-400 hover:text-brand-text dark:hover:text-blue-400 transition">← Back to iGym</Link>
       <h1 className="text-4xl font-black mb-2 mt-4">Gym Owner Portal</h1>
       <p className="text-gray-600 dark:text-gray-400 mb-8">Manage your facility, inventory, and members.</p>
 
@@ -75,10 +75,10 @@ export default function OwnerLoginPage() {
         </button>
       </form>
 
-      <div className="mt-10 p-4 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl text-xs text-gray-500 dark:text-gray-500">
+      <div className="mt-10 p-4 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl text-xs text-gray-500 dark:text-gray-400">
         <strong className="text-gray-700 dark:text-gray-300">Demo accounts:</strong> <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">owner</code> / <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">123</code> (Iron Paradise), <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">zenowner</code> / <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">123</code> (Zen Wellness)
       </div>
-      <p className="mt-4 text-sm text-gray-500 dark:text-gray-500">
+      <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">
         New gym owner? Register your business from the iGym mobile app for now.
       </p>
     </div>

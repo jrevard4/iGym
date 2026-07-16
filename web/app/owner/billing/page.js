@@ -87,7 +87,7 @@ function OwnerBillingPageInner() {
     return (
       <div className="max-w-md mx-auto py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Unknown plan</h1>
-        <Link href="/owner/analytics" className="text-brand-text hover:underline">← Back to Analytics</Link>
+        <Link href="/owner/analytics" className="text-brand-text dark:text-blue-400 hover:underline">← Back to Analytics</Link>
       </div>
     );
   }
@@ -110,7 +110,7 @@ function OwnerBillingPageInner() {
 
   return (
     <div className="max-w-md mx-auto py-12">
-      <Link href="/owner/analytics" className="text-brand-text hover:underline text-sm font-semibold">
+      <Link href="/owner/analytics" className="text-brand-text dark:text-blue-400 hover:underline text-sm font-semibold">
         ← Back to Analytics
       </Link>
 
@@ -157,7 +157,7 @@ function OwnerBillingPageInner() {
           <BillingCheckoutForm plan={plan} tier={tier} owner={owner} persistOwner={persistOwner} onSuccess={() => setUpgraded(true)} onError={setSetupError} />
         </Elements>
       ) : (
-        <div className="text-center text-gray-400 dark:text-gray-600 py-6">Setting up payment...</div>
+        <div className="text-center text-gray-400 dark:text-gray-400 py-6">Setting up payment...</div>
       )}
     </div>
   );

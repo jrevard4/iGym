@@ -21,7 +21,8 @@ export default function OwnerTrainersPage() {
     setNewTrainer({ name: '', fee: '', bio: '' });
   };
 
-  const removeTrainer = async (id) => {
+  const removeTrainer = async (id, name) => {
+    if (!confirm(`Remove ${name} from your trainer roster?`)) return;
     await persistOwner({ ...owner, trainers: trainers.filter((t) => t.id !== id) });
   };
 
@@ -48,17 +49,17 @@ export default function OwnerTrainersPage() {
       </div>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">Roster</h2>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-4">Roster</h2>
         {trainers.map((t) => (
           <div key={t.id} className="flex justify-between items-start border-b border-gray-100 dark:border-gray-800 pb-3 mb-3">
             <div>
               <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{t.name}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-500">${t.fee}/hr • {t.bio}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">${t.fee}/hr • {t.bio}</div>
             </div>
-            <button onClick={() => removeTrainer(t.id)} className="text-danger text-xs font-semibold">Remove</button>
+            <button onClick={() => removeTrainer(t.id, t.name)} className="text-danger text-xs font-semibold">Remove</button>
           </div>
         ))}
-        {trainers.length === 0 && <p className="text-gray-400 dark:text-gray-600 italic text-sm mb-3">No trainers added yet.</p>}
+        {trainers.length === 0 && <p className="text-gray-400 dark:text-gray-400 italic text-sm mb-3">No trainers added yet.</p>}
         <div className="space-y-2">
           <input className={cls} placeholder="Trainer name" value={newTrainer.name} onChange={(e) => setNewTrainer((p) => ({ ...p, name: e.target.value }))} />
           <input className={cls} placeholder="Hourly fee ($)" type="number" value={newTrainer.fee} onChange={(e) => setNewTrainer((p) => ({ ...p, fee: e.target.value }))} />
@@ -69,7 +70,7 @@ export default function OwnerTrainersPage() {
 
       {bookingRequests.length > 0 && (
         <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-          <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">📅 Booking requests ({bookingRequests.length})</h2>
+          <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-4">📅 Booking requests ({bookingRequests.length})</h2>
           {bookingRequests.map((req) => {
             const isPending = req.status === 'PENDING';
             return (
@@ -85,9 +86,9 @@ export default function OwnerTrainersPage() {
                     <span className="text-success text-xs font-bold">✓ Confirmed</span>
                   )}
                 </div>
-                <div className="text-brand-text text-xs font-semibold mt-1">{req.trainerName}</div>
+                <div className="text-brand-text dark:text-blue-400 text-xs font-semibold mt-1">{req.trainerName}</div>
                 <div className="text-gray-600 dark:text-gray-400 text-sm mt-1">{req.message}</div>
-                <div className="text-gray-400 dark:text-gray-600 text-xs mt-2">{new Date(req.requestedAt).toLocaleString()}</div>
+                <div className="text-gray-400 dark:text-gray-400 text-xs mt-2">{new Date(req.requestedAt).toLocaleString()}</div>
               </div>
             );
           })}

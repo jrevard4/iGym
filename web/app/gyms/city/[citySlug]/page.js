@@ -56,7 +56,7 @@ export default async function CityGymsPage({ params }) {
         {gyms.map((gym) => <GymCard key={gym.id} gym={gym} />)}
       </div>
 
-      <Link href="/gyms" className="text-brand-text hover:underline font-semibold text-sm">
+      <Link href="/gyms" className="text-brand-text dark:text-blue-400 hover:underline font-semibold text-sm">
         Search all gyms with AI matching →
       </Link>
     </div>

@@ -29,18 +29,18 @@ export default function Header() {
     <header className="sticky top-0 z-40 bg-white/90 dark:bg-gray-900/90 backdrop-blur border-b border-gray-200 dark:border-gray-800">
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
         <Link href="/" className="text-2xl font-black tracking-tight">
-          <span className="text-brand-text">i</span>Gym
+          <span className="text-brand-text dark:text-blue-400">i</span>Gym
         </Link>
         <nav className="hidden sm:flex items-center gap-6 text-sm font-medium text-gray-700 dark:text-gray-300">
-          <Link href="/gyms" className="hover:text-brand-text">{t('findGym')}</Link>
-          {user && <Link href="/wallet" className="hover:text-brand-text">{t('wallet')}</Link>}
+          <Link href="/gyms" className="hover:text-brand-text dark:hover:text-blue-400">{t('findGym')}</Link>
+          {user && <Link href="/wallet" className="hover:text-brand-text dark:hover:text-blue-400">{t('wallet')}</Link>}
         </nav>
         <div className="flex items-center gap-3">
           <button
             onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="text-lg text-gray-500 dark:text-gray-400 hover:text-brand-text transition w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+            className="text-lg text-gray-500 dark:text-gray-400 hover:text-brand-text dark:hover:text-blue-400 transition w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>
@@ -48,7 +48,7 @@ export default function Header() {
             value={lang}
             onChange={(e) => setLang(e.target.value)}
             aria-label="Choose language"
-            className="text-sm bg-transparent text-gray-500 dark:text-gray-400 hover:text-brand-text transition outline-none cursor-pointer"
+            className="text-sm bg-transparent text-gray-500 dark:text-gray-400 hover:text-brand-text dark:hover:text-blue-400 transition outline-none cursor-pointer"
           >
             {LANGUAGES.map((l) => <option key={l.code} value={l.code}>{l.code.toUpperCase()}</option>)}
           </select>
@@ -68,7 +68,7 @@ export default function Header() {
             <>
               <Link
                 href="/login"
-                className="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-brand-text"
+                className="text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-brand-text dark:hover:text-blue-400"
               >
                 {t('login')}
               </Link>

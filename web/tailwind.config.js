@@ -9,10 +9,11 @@ module.exports = {
     extend: {
       colors: {
         brand: {
-          // #007AFF measures 4.01:1 with white text — fails WCAG AA (4.5:1)
-          // as a solid button background (the "Get Started" button flagged
-          // by the axe-core audit). Darkened just enough to clear the bar
-          // (5.81:1) while staying recognizably blue.
+          // #007AFF measures 4.01:1 against white — fails WCAG AA (4.5:1) for
+          // both button and link/text usage at normal sizes. Darkened just
+          // enough to clear the bar (5.81:1) while staying recognizably blue;
+          // an automated axe-core audit (web/tests/e2e/accessibility.spec.js)
+          // caught this — see that file for how to re-verify.
           DEFAULT: '#0062CC',
           dark:    '#0051D5',
           // #007AFF fails WCAG AA contrast (4.09:1) as normal-weight text on

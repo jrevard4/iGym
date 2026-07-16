@@ -29,9 +29,9 @@ export default function OwnerHeader({ gymName }) {
       <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link href="/" className="text-2xl font-black tracking-tight">
-            <span className="text-brand-text">i</span>Gym
+            <span className="text-brand-text dark:text-blue-400">i</span>Gym
           </Link>
-          <span className="hidden sm:inline text-xs font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide border-l border-gray-200 dark:border-gray-800 pl-3">
+          <span className="hidden sm:inline text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide border-l border-gray-200 dark:border-gray-800 pl-3">
             Owner Console
           </span>
         </div>
@@ -40,7 +40,7 @@ export default function OwnerHeader({ gymName }) {
             onClick={toggleTheme}
             aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="text-lg text-gray-500 dark:text-gray-400 hover:text-brand-text transition w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+            className="text-lg text-gray-500 dark:text-gray-400 hover:text-brand-text dark:hover:text-blue-400 transition w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
           >
             {theme === 'dark' ? '☀️' : '🌙'}
           </button>

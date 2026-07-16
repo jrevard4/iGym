@@ -71,6 +71,7 @@ create table if not exists gyms (
   "matchImpressions" int default 0,
   amenities jsonb default '[]'::jsonb,
   branding jsonb default '{}'::jsonb,
+  "siteKeywords" jsonb default '[]'::jsonb,  -- auto-extracted from the gym's own website; see /api/sync-keywords
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -195,6 +196,17 @@ create policy "Public read equipment photos" on storage.objects
 create policy "Public upload equipment photos" on storage.objects
   for insert with check (bucket_id = 'equipment-photos');
 
+-- Public bucket for a member's optional photo attached to a review — shown
+-- as a lightweight "photo verified" trust signal on the gym page.
+insert into storage.buckets (id, name, public)
+values ('review-photos', 'review-photos', true)
+on conflict (id) do nothing;
+
+create policy "Public read review photos" on storage.objects
+  for select using (bucket_id = 'review-photos');
+create policy "Public upload review photos" on storage.objects
+  for insert with check (bucket_id = 'review-photos');
+
 -- ─── ROW LEVEL SECURITY ────────────────────────────────────────────
 -- For an MVP using a single ANON key, RLS is left disabled — the anon key
 -- can read/write everything. Before production, enable RLS and tighten policies.
@@ -254,3 +266,17 @@ create policy "Public upload equipment photos" on storage.objects
 --
 -- Phase 7 additions (AI workout history):
 -- alter table users add column if not exists "savedWorkouts" jsonb default '[]'::jsonb;
+--
+-- Phase 8 additions (automated gym-site keyword indexing):
+-- alter table gyms add column if not exists "siteKeywords" jsonb default '[]'::jsonb;
+--
+-- Phase 9 additions (review photos, owner responses, equipment reports —
+-- all additive fields inside existing jsonb columns, no new columns needed
+-- except the storage bucket):
+-- insert into storage.buckets (id, name, public)
+-- values ('review-photos', 'review-photos', true)
+-- on conflict (id) do nothing;
+-- create policy "Public read review photos" on storage.objects
+--   for select using (bucket_id = 'review-photos');
+-- create policy "Public upload review photos" on storage.objects
+--   for insert with check (bucket_id = 'review-photos');

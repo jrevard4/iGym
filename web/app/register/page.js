@@ -70,7 +70,7 @@ function RegisterForm() {
         <input className={cls} placeholder="Street address" value={form.address} onChange={update('address')} />
         <div className="grid grid-cols-3 gap-3">
           <input className={cls} placeholder="City" value={form.city} onChange={update('city')} />
-          <select className={cls + ' bg-white'} value={form.state} onChange={update('state')}>
+          <select className={cls + ' bg-white'} aria-label="State" value={form.state} onChange={update('state')}>
             <option value="">State</option>
             {US_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -104,7 +104,7 @@ function RegisterForm() {
 
       <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
         Already have one?{' '}
-        <Link href="/login" className="text-brand-text hover:underline font-semibold">Sign in</Link>
+        <Link href="/login" className="text-brand-text dark:text-blue-400 hover:underline font-semibold">Sign in</Link>
       </p>
     </div>
   );

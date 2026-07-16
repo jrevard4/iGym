@@ -76,7 +76,7 @@ function LoginForm() {
 
       {guestMode ? (
         <form onSubmit={submitGuest} className="space-y-4">
-          <p className="text-sm text-gray-500 dark:text-gray-500">{t('guestCheckoutHint')}</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">{t('guestCheckoutHint')}</p>
           <label className="block">
             <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{t('fullName')}</span>
             <input
@@ -109,7 +109,7 @@ function LoginForm() {
           >
             {busy ? t('processing') : t('continueAsGuest')}
           </button>
-          <button type="button" onClick={() => setGuestMode(false)} className="w-full text-center text-sm text-gray-500 dark:text-gray-500 hover:text-brand-text transition">
+          <button type="button" onClick={() => setGuestMode(false)} className="w-full text-center text-sm text-gray-500 dark:text-gray-400 hover:text-brand-text dark:hover:text-blue-400 transition">
             ← Back to sign in
           </button>
         </form>
@@ -156,7 +156,7 @@ function LoginForm() {
             <button
               type="button"
               onClick={() => setGuestMode(true)}
-              className="w-full mt-3 text-center text-sm font-semibold text-brand-text hover:underline"
+              className="w-full mt-3 text-center text-sm font-semibold text-brand-text dark:text-blue-400 hover:underline"
             >
               {t('continueAsGuest')} →
             </button>
@@ -164,12 +164,12 @@ function LoginForm() {
 
           <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
             {t('dontHaveAccount')}{' '}
-            <Link href="/register" className="text-brand-text hover:underline font-semibold">
+            <Link href="/register" className="text-brand-text dark:text-blue-400 hover:underline font-semibold">
               Create an account
             </Link>
           </p>
 
-          <div className="mt-10 p-4 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl text-xs text-gray-500 dark:text-gray-500">
+          <div className="mt-10 p-4 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl text-xs text-gray-500 dark:text-gray-400">
             <strong className="text-gray-700 dark:text-gray-300">Demo account:</strong> username <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">admin</code> password <code className="bg-white dark:bg-gray-800 px-1.5 py-0.5 rounded border dark:border-gray-700">123</code>
           </div>
         </>

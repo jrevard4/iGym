@@ -56,7 +56,7 @@ export default function OwnerAnalyticsPage() {
       </div>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">💰 Revenue overview</h2>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-4">💰 Revenue overview</h2>
         <div className="grid grid-cols-2 gap-4">
           <Stat label="Total earned" value={`$${(owner.totalPassRevenue || 0).toFixed(2)}`} color="text-gray-900 dark:text-gray-100" />
           <Stat label="Platform fees (12%)" value={`$${(owner.platformFeesPaid || 0).toFixed(2)}`} color="text-danger" />
@@ -79,10 +79,10 @@ export default function OwnerAnalyticsPage() {
       </div>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">⭐ Subscription & placement</h2>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-4">⭐ Subscription & placement</h2>
         <div className="flex justify-between items-center mb-4">
           <span className="font-bold" style={{ color: plan.color }}>{plan.emoji} {plan.name} Plan</span>
-          <span className="text-brand-text font-bold">${plan.price}/mo</span>
+          <span className="text-brand-text dark:text-blue-400 font-bold">${plan.price}/mo</span>
         </div>
         <div className="flex gap-2 mb-4">
           {Object.keys(PLAN_TIERS).filter((k) => k !== owner.plan).map((k) => {
@@ -101,16 +101,16 @@ export default function OwnerAnalyticsPage() {
         <div className="flex justify-between items-center border-t border-gray-100 dark:border-gray-800 pt-4">
           <div>
             <div className="font-semibold text-sm text-gray-900 dark:text-gray-100">⭐ Featured placement</div>
-            <div className="text-xs text-gray-500 dark:text-gray-500">{planAllows('featured') ? 'Appear at the top of member searches.' : 'Pro plan required.'}</div>
+            <div className="text-xs text-gray-500 dark:text-gray-400">{planAllows('featured') ? 'Appear at the top of member searches.' : 'Pro plan required.'}</div>
           </div>
           <input type="checkbox" checked={!!owner.featured} onChange={toggleFeatured} disabled={!planAllows('featured')} className="w-5 h-5 accent-warning" />
         </div>
       </div>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">Facility overview</h2>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-4">Facility overview</h2>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          <Stat label="Equipment" value={(owner.equipment || []).length} color="text-brand-text" />
+          <Stat label="Equipment" value={(owner.equipment || []).length} color="text-brand-text dark:text-blue-400" />
           <Stat label="Pass tiers" value={(owner.passes || []).length} color="text-success" />
           <Stat label="Trainers" value={(owner.trainers || []).length} color="text-warning" />
           <Stat label="Classes" value={(owner.classes || []).length} color="text-accent" />
@@ -119,12 +119,12 @@ export default function OwnerAnalyticsPage() {
       </div>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-1">📊 Busiest times</h2>
-        <p className="text-xs text-gray-500 dark:text-gray-500 mb-4">Based on front-desk check-ins.</p>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-1">📊 Busiest times</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Based on front-desk check-ins.</p>
         {!heatmap ? (
-          <p className="text-gray-400 dark:text-gray-600 italic text-sm">Loading...</p>
+          <p className="text-gray-400 dark:text-gray-400 italic text-sm">Loading...</p>
         ) : !heatmap.peak ? (
-          <p className="text-gray-400 dark:text-gray-600 italic text-sm">No check-ins recorded yet.</p>
+          <p className="text-gray-400 dark:text-gray-400 italic text-sm">No check-ins recorded yet.</p>
         ) : (
           <>
             <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">🔥 Peak time: {heatmap.peakLabel}</p>
@@ -134,7 +134,7 @@ export default function OwnerAnalyticsPage() {
                   const max = Math.max(1, ...heatmap.byHour);
                   return (
                     <div key={day} className="flex items-center gap-1 mb-1">
-                      <span className="w-8 text-xs text-gray-400 dark:text-gray-600 font-semibold shrink-0">{DAY_LABELS[day]}</span>
+                      <span className="w-8 text-xs text-gray-400 dark:text-gray-400 font-semibold shrink-0">{DAY_LABELS[day]}</span>
                       {hours.map((count, hour) => (
                         <span
                           key={hour}
@@ -159,7 +159,7 @@ function Stat({ label, value, color }) {
   return (
     <div className="text-center">
       <div className={'text-2xl font-black ' + color}>{value}</div>
-      <div className="text-xs text-gray-500 dark:text-gray-500 font-semibold mt-1">{label}</div>
+      <div className="text-xs text-gray-500 dark:text-gray-400 font-semibold mt-1">{label}</div>
     </div>
   );
 }

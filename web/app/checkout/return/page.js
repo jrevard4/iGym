@@ -92,7 +92,7 @@ function CheckoutReturnPageInner() {
         <h1 className="text-2xl font-bold mb-2">Payment not completed</h1>
         <p className="text-gray-600 mb-6">{error}</p>
         {gymId && (
-          <Link href={`/gyms/${gymId}`} className="text-brand-text hover:underline">← Back to gym</Link>
+          <Link href={`/gyms/${gymId}`} className="text-brand-text dark:text-blue-400 hover:underline">← Back to gym</Link>
         )}
       </div>
     );

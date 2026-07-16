@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { CLASS_TYPES, PRESET_PASSES, PRESET_MEMBERSHIPS, AMENITIES } from '../../../../lib/constants';
-import { uniqueId, getActivePromotion } from '../../../../lib/helpers';
+import { uniqueId, getActivePromotion, renderStars } from '../../../../lib/helpers';
+import { respondToReview } from '../../../../lib/supabase';
 import { useOwnerContext } from '@/lib/ownerContext';
 
 const cls = 'w-full px-4 py-3 border border-gray-300 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 rounded-lg text-sm focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none';
@@ -15,6 +16,7 @@ export default function OwnerProfilePage() {
   const [customClass, setCustomClass] = useState('');
   const [syncingBrand, setSyncingBrand] = useState(false);
   const [brandError, setBrandError] = useState('');
+  const [syncingKeywords, setSyncingKeywords] = useState(false);
 
   const [newPromo, setNewPromo] = useState({ title: '', detail: '', days: '7' });
   const [newPass, setNewPass] = useState({ label: '', price: '', type: 'TIME', value: '', features: [] });
@@ -25,8 +27,36 @@ export default function OwnerProfilePage() {
   const save = async (e) => {
     e.preventDefault();
     setSaving(true);
-    await persistOwner({ ...owner, ...form });
+    const updated = { ...owner, ...form };
+    await persistOwner(updated);
     setSaving(false);
+    syncKeywordsInBackground(updated);
+  };
+
+  // Automated: re-indexes the gym's own website for searchable keywords on
+  // every save where a website is on file — no manual "sync" click needed,
+  // unlike the branding sync below. Best-effort: search still works fine
+  // without keywords, so failures here are silent.
+  const syncKeywordsInBackground = async (base) => {
+    if (!base.website?.trim()) return;
+    setSyncingKeywords(true);
+    try {
+      const res = await fetch('/api/sync-keywords', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: base.website.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok && data.keywords) {
+        const next = { ...base, siteKeywords: data.keywords };
+        setForm((f) => ({ ...f, siteKeywords: data.keywords }));
+        await persistOwner(next);
+      }
+    } catch {
+      /* best-effort background indexing — never surfaces an error to the owner */
+    } finally {
+      setSyncingKeywords(false);
+    }
   };
 
   const toggleClass = (c) => {
@@ -124,7 +154,8 @@ export default function OwnerProfilePage() {
     setNewPass((p) => ({ ...p, features: p.features.filter((_, idx) => idx !== i) }));
   };
 
-  const removePass = async (id) => {
+  const removePass = async (id, label) => {
+    if (!confirm(`Remove "${label}" from your pass menu? Members who already own this pass keep it — this only stops new sales.`)) return;
     const updated = { ...owner, ...form, passes: (form.passes || []).filter((p) => p.id !== id) };
     setForm(updated);
     await persistOwner(updated);
@@ -138,7 +169,7 @@ export default function OwnerProfilePage() {
       </div>
 
       <form onSubmit={save} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 space-y-3">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500">Public info</h2>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400">Public info</h2>
         <input className={cls} placeholder="Gym name" value={form.gymName || ''} onChange={update('gymName')} />
         <input className={cls} placeholder="Full address" value={form.location || ''} onChange={update('location')} />
         <input className={cls} placeholder="Phone" value={form.phone || ''} onChange={update('phone')} />
@@ -162,7 +193,7 @@ export default function OwnerProfilePage() {
         </div>
         <textarea className={cls} rows={3} placeholder="Tell members about your facility..." value={form.description || ''} onChange={update('description')} />
 
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 pt-2">Classes offered</h2>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 pt-2">Classes offered</h2>
         <div className="flex flex-wrap gap-2">
           {[...new Set([...CLASS_TYPES, ...(form.classes || [])])].map((c) => {
             const active = (form.classes || []).includes(c);
@@ -178,7 +209,7 @@ export default function OwnerProfilePage() {
           <button type="button" onClick={addCustomClass} className="bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-4 rounded-lg text-sm font-semibold shrink-0">Add</button>
         </div>
 
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 pt-2">Amenities</h2>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 pt-2">Amenities</h2>
         <div className="flex flex-wrap gap-2">
           {AMENITIES.map((a) => {
             const active = (form.amenities || []).includes(a);
@@ -196,8 +227,8 @@ export default function OwnerProfilePage() {
       </form>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-1">🎨 Gym branding</h2>
-        <p className="text-xs text-gray-500 dark:text-gray-500 mb-4">
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-1">🎨 Gym branding</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
           Pull your brand color, logo, and hero image from your website so your iGym listing looks like your own site.
         </p>
         {form.website?.trim() ? (
@@ -210,7 +241,7 @@ export default function OwnerProfilePage() {
             {syncingBrand ? 'Syncing...' : '🔄 Sync branding from website'}
           </button>
         ) : (
-          <p className="text-sm text-gray-400 dark:text-gray-600 italic">Add a website URL above, then save, to enable this.</p>
+          <p className="text-sm text-gray-400 dark:text-gray-400 italic">Add a website URL above, then save, to enable this.</p>
         )}
         {brandError && <p className="text-xs text-danger mt-2">{brandError}</p>}
         {form.branding && (form.branding.primaryColor || form.branding.logoUrl || form.branding.heroImageUrl) && (
@@ -218,7 +249,7 @@ export default function OwnerProfilePage() {
             {form.branding.primaryColor && (
               <div className="flex items-center gap-2">
                 <span className="w-8 h-8 rounded-full border border-gray-200 dark:border-gray-700" style={{ backgroundColor: form.branding.primaryColor }} />
-                <span className="text-xs font-mono text-gray-500 dark:text-gray-500">{form.branding.primaryColor}</span>
+                <span className="text-xs font-mono text-gray-500 dark:text-gray-400">{form.branding.primaryColor}</span>
               </div>
             )}
             {form.branding.logoUrl && (
@@ -232,20 +263,40 @@ export default function OwnerProfilePage() {
             <button type="button" onClick={clearBranding} className="text-xs font-semibold text-danger hover:underline">Remove</button>
           </div>
         )}
-        <p className="text-xs text-gray-400 dark:text-gray-600 mt-3">Click "Save profile" above to apply changes.</p>
+        <p className="text-xs text-gray-400 dark:text-gray-400 mt-3">Click "Save profile" above to apply changes.</p>
       </div>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-1">🔥 Promotions</h2>
-        <p className="text-xs text-gray-500 dark:text-gray-500 mb-4">Time-boxed offers shown to members browsing your gym.</p>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-1">🔎 Search keywords</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+          Automatically scanned from your website every time you save — helps members find you by things you never manually tagged, like specific classes or amenities mentioned on your site.
+        </p>
+        {syncingKeywords ? (
+          <p className="text-xs text-gray-400 dark:text-gray-400 italic">Scanning your website...</p>
+        ) : (form.siteKeywords || []).length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {form.siteKeywords.map((k) => (
+              <span key={k} className="bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs font-semibold px-2.5 py-1 rounded-full">{k}</span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-gray-400 dark:text-gray-400 italic">
+            {form.website?.trim() ? 'Nothing detected yet — save your profile to scan your website.' : 'Add a website URL above to enable this.'}
+          </p>
+        )}
+      </div>
+
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-1">🔥 Promotions</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Time-boxed offers shown to members browsing your gym.</p>
         {(form.promotions || []).map((p) => {
           const active = getActivePromotion({ promotions: [p] });
           return (
             <div key={p.id} className="flex justify-between items-start border-b border-gray-100 dark:border-gray-800 pb-3 mb-3">
               <div>
                 <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{p.title}</div>
-                {p.detail && <div className="text-xs text-gray-500 dark:text-gray-500">{p.detail}</div>}
-                <div className={'text-xs font-bold mt-1 ' + (active ? 'text-success' : 'text-gray-400 dark:text-gray-600')}>
+                {p.detail && <div className="text-xs text-gray-500 dark:text-gray-400">{p.detail}</div>}
+                <div className={'text-xs font-bold mt-1 ' + (active ? 'text-success' : 'text-gray-400 dark:text-gray-400')}>
                   {active ? `Live until ${new Date(p.endDate).toLocaleDateString()}` : 'Expired'}
                 </div>
               </div>
@@ -253,7 +304,7 @@ export default function OwnerProfilePage() {
             </div>
           );
         })}
-        {(form.promotions || []).length === 0 && <p className="text-gray-400 dark:text-gray-600 italic text-sm mb-3">No active promotions.</p>}
+        {(form.promotions || []).length === 0 && <p className="text-gray-400 dark:text-gray-400 italic text-sm mb-3">No active promotions.</p>}
         <div className="space-y-2">
           <input className={cls} placeholder='Title, e.g. "20% off day passes this week"' value={newPromo.title} onChange={(e) => setNewPromo((p) => ({ ...p, title: e.target.value }))} />
           <input className={cls} placeholder="Details (optional)" value={newPromo.detail} onChange={(e) => setNewPromo((p) => ({ ...p, detail: e.target.value }))} />
@@ -263,22 +314,22 @@ export default function OwnerProfilePage() {
       </div>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
-        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-1">🎟️ Passes & memberships</h2>
-        <p className="text-xs text-gray-500 dark:text-gray-500 mb-4">Day-passes and punch cards are one-time access. Memberships are recurring plans members compare side by side.</p>
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-1">🎟️ Passes & memberships</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Day-passes and punch cards are one-time access. Memberships are recurring plans members compare side by side.</p>
         {(form.passes || []).map((p) => (
           <div key={p.id} className="flex justify-between items-start border-b border-gray-100 dark:border-gray-800 pb-3 mb-3">
             <div>
               <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{p.label}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-500">
+              <div className="text-xs text-gray-500 dark:text-gray-400">
                 {p.type === 'PUNCH' ? `${p.value} scans` : p.type === 'MEMBERSHIP' ? `Billed every ${p.value} days` : `${p.value} days valid`}
               </div>
               {p.type === 'MEMBERSHIP' && p.features?.length > 0 && (
-                <div className="text-xs text-gray-400 dark:text-gray-600 mt-1">{p.features.join(' · ')}</div>
+                <div className="text-xs text-gray-400 dark:text-gray-400 mt-1">{p.features.join(' · ')}</div>
               )}
             </div>
             <div className="text-right shrink-0 ml-3">
               <div className="text-success font-bold">${Number(p.price).toFixed(2)}</div>
-              <button onClick={() => removePass(p.id)} className="text-danger text-xs font-semibold">Remove</button>
+              <button onClick={() => removePass(p.id, p.label)} className="text-danger text-xs font-semibold">Remove</button>
             </div>
           </div>
         ))}
@@ -315,7 +366,7 @@ export default function OwnerProfilePage() {
           />
           {newPass.type === 'MEMBERSHIP' && (
             <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-3">
-              <div className="text-xs font-bold text-gray-500 dark:text-gray-500 uppercase tracking-wide mb-2">What's included</div>
+              <div className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">What's included</div>
               {(newPass.features || []).map((f, i) => (
                 <div key={i} className="flex justify-between items-center text-sm mb-1.5">
                   <span>✓ {f}</span>
@@ -337,6 +388,75 @@ export default function OwnerProfilePage() {
           <button onClick={addPass} className="w-full bg-accent text-white font-semibold py-2.5 rounded-lg hover:opacity-90 transition">+ Add to menu</button>
         </div>
       </div>
+
+      <ReviewsCard owner={owner} persistOwner={persistOwner} />
+    </div>
+  );
+}
+
+// ─── Member reviews — owner responses ─────────────────────────────────────
+function ReviewsCard({ owner, persistOwner }) {
+  const reviews = owner.gymReviews || [];
+  const [replyingId, setReplyingId] = useState(null);
+  const [replyText, setReplyText] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const startReply = (id) => { setReplyingId(id); setReplyText(''); };
+
+  const submitReply = async (reviewId) => {
+    if (!replyText.trim()) return;
+    setSaving(true);
+    try {
+      await respondToReview(owner.id, reviewId, replyText.trim());
+      const updated = {
+        ...owner,
+        gymReviews: reviews.map((r) => r.id === reviewId ? { ...r, ownerResponse: { text: replyText.trim(), respondedAt: new Date().toISOString() } } : r),
+      };
+      await persistOwner(updated);
+      setReplyingId(null);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (reviews.length === 0) return null;
+
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
+      <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-1">💬 Member Reviews</h2>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Reply to build trust with future members browsing your gym.</p>
+      <ul className="space-y-3">
+        {reviews.map((r) => (
+          <li key={r.id} className="border-b border-gray-100 dark:border-gray-800 pb-3 last:border-0">
+            <div className="flex justify-between items-center mb-1">
+              <span className="font-bold text-sm text-gray-900 dark:text-gray-100">@{r.username}</span>
+              <span className="text-warning text-sm">{renderStars(r.rating)}</span>
+            </div>
+            <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">{r.text}</p>
+            {r.ownerResponse ? (
+              <div className="pl-3 border-l-2 border-brand/30">
+                <div className="text-xs font-bold text-gray-700 dark:text-gray-300">Your response</div>
+                <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">{r.ownerResponse.text}</p>
+              </div>
+            ) : replyingId === r.id ? (
+              <div className="flex gap-2">
+                <input
+                  className={cls}
+                  placeholder="Write a response..."
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  autoFocus
+                />
+                <button onClick={() => submitReply(r.id)} disabled={saving || !replyText.trim()} className="bg-brand hover:bg-brand-dark text-white text-xs font-semibold px-3 rounded-lg shrink-0 disabled:opacity-60">
+                  {saving ? '...' : 'Send'}
+                </button>
+              </div>
+            ) : (
+              <button onClick={() => startReply(r.id)} className="text-xs font-semibold text-brand-text hover:underline">Reply</button>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

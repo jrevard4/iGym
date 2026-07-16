@@ -5,7 +5,22 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, setSession } from '@/lib/auth';
 import { loadUserPasses, loadUserCheckins, getUserById, upsertUser } from '../../../lib/supabase';
-import { computeCheckinStats } from '../../../lib/helpers';
+import { computeCheckinStats, buildWorkoutICS } from '../../../lib/helpers';
+
+function downloadICS(workout) {
+  const ics = buildWorkoutICS(workout);
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(workout.title || 'workout').replace(/[^a-z0-9]+/gi, '-')}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+const dayKey = (d) => new Date(d).toISOString().slice(0, 10);
 
 export default function WalletPage() {
   const router = useRouter();
@@ -217,12 +232,30 @@ function WorkoutHistoryCard({ user, onChange }) {
     await upsertUser(updated);
   };
 
+  const markComplete = async (id) => {
+    const today = dayKey(new Date());
+    const updated = {
+      ...user,
+      savedWorkouts: workouts.map((w) => {
+        if (w.id !== id) return w;
+        const completions = w.completions || [];
+        if (completions.some((c) => dayKey(c) === today)) return w; // already marked today
+        return { ...w, completions: [new Date().toISOString(), ...completions] };
+      }),
+    };
+    setSession(updated);
+    onChange(updated);
+    await upsertUser(updated);
+  };
+
   return (
     <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 mb-8">
-      <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-500 mb-4">✨ Recent AI Workouts</h2>
+      <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-4">✨ Recent AI Workouts</h2>
       <ul className="space-y-2">
         {workouts.map((w) => {
           const expanded = expandedId === w.id;
+          const stats = computeCheckinStats((w.completions || []).map((c) => ({ created_at: c })));
+          const doneToday = (w.completions || []).some((c) => dayKey(c) === dayKey(new Date()));
           return (
             <li key={w.id} className="border border-gray-100 dark:border-gray-800 rounded-xl overflow-hidden">
               <button
@@ -231,22 +264,33 @@ function WorkoutHistoryCard({ user, onChange }) {
               >
                 <div>
                   <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{w.title}</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-500 mt-0.5">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                     {w.gymName} · {(w.muscleGroups || []).join(', ') || 'Full body'} · {new Date(w.createdAt).toLocaleDateString()}
+                    {stats.totalVisits > 0 && ` · ✓ ${stats.totalVisits}x done${stats.currentStreak > 1 ? ` · 🔥 ${stats.currentStreak}-day streak` : ''}`}
                   </div>
                 </div>
-                <span className="text-gray-400 dark:text-gray-600 text-xs shrink-0">{expanded ? '▲' : '▼'}</span>
+                <span className="text-gray-400 dark:text-gray-400 text-xs shrink-0">{expanded ? '▲' : '▼'}</span>
               </button>
               {expanded && (
                 <div className="px-4 pb-4">
-                  <ul className="space-y-2 mb-2">
+                  <ul className="space-y-2 mb-3">
                     {(w.exercises || []).map((ex, i) => (
                       <li key={i} className="text-xs text-gray-700 dark:text-gray-300">
                         <span className="font-semibold">{i + 1}. {ex.name}</span> — {ex.sets} × {ex.reps} ({ex.equipment})
                       </li>
                     ))}
                   </ul>
-                  <button onClick={() => remove(w.id)} className="text-danger text-xs font-semibold hover:underline">Remove</button>
+                  <div className="flex flex-wrap gap-3 items-center">
+                    <button
+                      onClick={() => markComplete(w.id)}
+                      disabled={doneToday}
+                      className="bg-success text-white text-xs font-semibold px-3 py-1.5 rounded-lg disabled:opacity-60 transition"
+                    >
+                      {doneToday ? '✓ Done today' : 'Mark complete today'}
+                    </button>
+                    <button onClick={() => downloadICS(w)} className="text-brand-text text-xs font-semibold hover:underline">📅 Add to calendar</button>
+                    <button onClick={() => remove(w.id)} className="text-danger text-xs font-semibold hover:underline">Remove</button>
+                  </div>
                 </div>
               )}
             </li>

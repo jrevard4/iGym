@@ -12,7 +12,7 @@ import { useOwnerContext } from '@/lib/ownerContext';
 // (most test-card payments resolve on /owner/billing without ever coming here).
 export default function OwnerBillingReturnPage() {
   return (
-    <Suspense fallback={<div className="max-w-md mx-auto py-20 text-center text-gray-400 dark:text-gray-600">Confirming your payment...</div>}>
+    <Suspense fallback={<div className="max-w-md mx-auto py-20 text-center text-gray-400 dark:text-gray-400">Confirming your payment...</div>}>
       <OwnerBillingReturnPageInner />
     </Suspense>
   );
@@ -56,7 +56,7 @@ function OwnerBillingReturnPageInner() {
   }, []);
 
   if (status === 'checking') {
-    return <div className="max-w-md mx-auto py-20 text-center text-gray-400 dark:text-gray-600">Confirming your payment...</div>;
+    return <div className="max-w-md mx-auto py-20 text-center text-gray-400 dark:text-gray-400">Confirming your payment...</div>;
   }
 
   if (status === 'failed') {
@@ -64,7 +64,7 @@ function OwnerBillingReturnPageInner() {
       <div className="max-w-md mx-auto py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Payment not completed</h1>
         <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
-        <Link href="/owner/analytics" className="text-brand-text hover:underline">← Back to Analytics</Link>
+        <Link href="/owner/analytics" className="text-brand-text dark:text-blue-400 hover:underline">← Back to Analytics</Link>
       </div>
     );
   }

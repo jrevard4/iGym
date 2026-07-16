@@ -25,11 +25,11 @@ import env from './lib/env';
 import {
   CLASS_TYPES, EQUIP_CATEGORIES, PLAN_TIERS, US_STATES, PRESET_PASSES,
   DEFAULT_LOCATION, PLATFORM_FEE_RATE, MEMBER_PREMIUM_PRICE, BRAND_WEBSITES,
-  MUSCLE_GROUPS, EXPERIENCE_LEVELS,
+  MUSCLE_GROUPS, EXPERIENCE_LEVELS, AMENITIES,
 } from './lib/constants';
 import {
   getDistanceMiles, getAvgRating, renderStars, isOpenNow, getAIMatchScore,
-  runLocalMatch, uniqueId, getActivePromotion, computeCheckinStats,
+  runLocalMatch, uniqueId, getActivePromotion, computeCheckinStats, findSimilarGyms,
 } from './lib/helpers';
 import {
   loadUsers, upsertUser, loginUser as dbLoginUser, registerUser as dbRegisterUser,
@@ -37,6 +37,7 @@ import {
   addGymReview, recordPassSale, savePass, loadUserPasses, updatePass, deletePass,
   getPassById, seedRealGymsIfNeeded, loadGymPasses, redeemReferral, redeemGymReferral, incrementMatchImpressions,
   recordCheckin, loadUserCheckins, getUserByReferralCode, recordReferralReward, registerGuestUser,
+  reportEquipmentIssue, respondToReview, uploadPhotoFromUri,
 } from './lib/supabase';
 import { matchmakerSearch, identifyEquipmentFromImage, searchEquipmentOnWeb, generateWorkoutPlan, AIError } from './lib/ai';
 import { sendPushNotifications } from './lib/push';
@@ -247,11 +248,17 @@ function IGymApp() {
   const [newTrainer, setNewTrainer] = useState({ name:'', fee:'', bio:'' });
   const [gymReviewText, setGymReviewText] = useState('');
   const [gymReviewRating, setGymReviewRating] = useState(5);
+  const [gymReviewPhoto, setGymReviewPhoto] = useState(null);
+  const [uploadingReviewPhoto, setUploadingReviewPhoto] = useState(false);
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [ownerIDInput, setOwnerIDInput] = useState('');
   const [ownerPassInput, setOwnerPassInput] = useState('');
   const [reviewInput, setReviewInput] = useState('');
+  const [equipReportNote, setEquipReportNote] = useState('');
+  const [equipReportSent, setEquipReportSent] = useState(false);
+  const [replyingReviewId, setReplyingReviewId] = useState(null);
+  const [reviewReplyText, setReviewReplyText] = useState('');
   const [regData, setRegData] = useState({ firstName:'', lastName:'', username:'', password:'', email:'', address:'', city:'', state:'Select State', zip:'', referredBy:'' });
   const [ownerRegData, setOwnerRegData] = useState({ gymName:'', ownerID:'', password:'', email:'', businessTaxID:'', referredBy:'' });
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -411,18 +418,30 @@ function IGymApp() {
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
 
   // ─── Handlers ─────────────────────────────────────────────────
+  const pickReviewPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images, allowsEditing: true, quality: 0.85,
+    });
+    if (!result.canceled) setGymReviewPhoto(result.assets[0].uri);
+  };
+
   const submitGymReview = async () => {
     if (!gymReviewText.trim()) return Alert.alert('Missing Review', 'Please write something before submitting.');
     if (!selectedGym) return;
+    setUploadingReviewPhoto(true);
+    let photoUrl = null;
+    if (gymReviewPhoto) photoUrl = await uploadPhotoFromUri('review-photos', gymReviewPhoto);
+    setUploadingReviewPhoto(false);
     const newReview = {
       id: uniqueId('gr_'), userId: currentUser.id, username: currentUser.username,
       rating: gymReviewRating, text: gymReviewText.trim(), date: new Date().toISOString(),
+      ...(photoUrl && { photoUrl }),
     };
     const updatedGym = { ...selectedGym, gymReviews: [newReview, ...(selectedGym.gymReviews || [])] };
     await addGymReview(selectedGym.id, newReview);
     setOwnerDatabase(prev => prev.map(g => g.id === selectedGym.id ? updatedGym : g));
     setSelectedGym(updatedGym);
-    setGymReviewText(''); setGymReviewRating(5);
+    setGymReviewText(''); setGymReviewRating(5); setGymReviewPhoto(null);
     Alert.alert('Review Posted!', 'Thanks for sharing your experience.');
   };
 
@@ -1017,6 +1036,23 @@ function IGymApp() {
     upsertUser(updatedUser);
   };
 
+  const markWorkoutComplete = async (id) => {
+    if (!currentUser) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const updatedUser = {
+      ...currentUser,
+      savedWorkouts: (currentUser.savedWorkouts || []).map(w => {
+        if (w.id !== id) return w;
+        const completions = w.completions || [];
+        if (completions.some(c => c.slice(0, 10) === today)) return w;
+        return { ...w, completions: [new Date().toISOString(), ...completions] };
+      }),
+    };
+    setCurrentUser(updatedUser);
+    await AsyncStorage.setItem('@active_user', JSON.stringify(updatedUser));
+    upsertUser(updatedUser);
+  };
+
   const toggleWorkoutMuscle = (m) => {
     setWorkoutMuscles(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
   };
@@ -1208,6 +1244,30 @@ function IGymApp() {
     setSelectedGym(updatedGym);
     await upsertGym(updatedGym);
     setReviewInput('');
+  };
+
+  // Crowdsourced from members — doesn't mark the item out of service itself
+  // (that stays an owner-only action), just raises a flag the owner sees in
+  // their Inventory alerts (computeEquipmentAlerts).
+  const submitEquipReport = async () => {
+    if (!equipReportNote.trim() || !selectedGym || !selectedEquipment) return;
+    await reportEquipmentIssue(selectedGym.id, selectedEquipment.id, equipReportNote.trim(), currentUser?.username);
+    setEquipReportNote('');
+    setEquipReportSent(true);
+  };
+
+  const submitReviewReply = async (reviewId) => {
+    if (!reviewReplyText.trim() || !currentOwner) return;
+    await respondToReview(currentOwner.id, reviewId, reviewReplyText.trim());
+    const updated = {
+      ...currentOwner,
+      gymReviews: (currentOwner.gymReviews || []).map(r =>
+        r.id === reviewId ? { ...r, ownerResponse: { text: reviewReplyText.trim(), respondedAt: new Date().toISOString() } } : r
+      ),
+    };
+    await persistOwner(updated);
+    setReplyingReviewId(null);
+    setReviewReplyText('');
   };
 
   const saveApiKey = async () => {
@@ -1710,6 +1770,7 @@ function IGymApp() {
                   <TextInput style={styles.input} value={infoForm.gymName} onChangeText={t => setInfoForm(p=>({...p,gymName:t}))} placeholder="Public Gym Name"/>
                   <TextInput style={styles.input} value={infoForm.location} onChangeText={t => setInfoForm(p=>({...p,location:t}))} placeholder="Full Address"/>
                   <TextInput style={styles.input} value={infoForm.phone} onChangeText={t => setInfoForm(p=>({...p,phone:t}))} placeholder="Contact Phone" keyboardType="phone-pad"/>
+                  <TextInput style={styles.input} value={infoForm.website} onChangeText={t => setInfoForm(p=>({...p,website:t}))} placeholder="Website (e.g. https://yourgym.com)" autoCapitalize="none" keyboardType="url"/>
                   <TextInput style={styles.input} value={infoForm.pricing} onChangeText={t => setInfoForm(p=>({...p,pricing:t}))} placeholder="Display Pricing"/>
                   <TextInput style={styles.input} value={String(infoForm.monthlyPrice||'')} onChangeText={t => setInfoForm(p=>({...p,monthlyPrice:t}))} placeholder="Numeric Monthly Price" keyboardType="numeric"/>
                   <TextInput
@@ -1813,6 +1874,36 @@ function IGymApp() {
                   <TouchableOpacity style={[styles.primaryBtn,{marginTop:10}]} onPress={saveGymProfile} disabled={isSavingGeo}>
                     {isSavingGeo ? <ActivityIndicator color="#FFF"/> : <Text style={styles.btnText}>Save to Database</Text>}
                   </TouchableOpacity>
+
+                  {(currentOwner?.gymReviews || []).length > 0 && (
+                    <>
+                      <Text style={[styles.sectionLabel,{marginTop:25}]}>💬 Member Reviews</Text>
+                      {currentOwner.gymReviews.map(rev => (
+                        <View key={rev.id} style={[styles.infoBox,{marginBottom:10}]}>
+                          <View style={styles.rowJustify}>
+                            <Text style={{fontWeight:'bold',fontSize:14}}>@{rev.username}</Text>
+                            <Text style={{color:'#FF9500',fontSize:13}}>{renderStars(rev.rating)}</Text>
+                          </View>
+                          <Text style={{marginTop:4,color:'#444',fontSize:13,lineHeight:19}}>{rev.text}</Text>
+                          {rev.ownerResponse ? (
+                            <View style={{marginTop:8,paddingLeft:10,borderLeftWidth:2,borderLeftColor:theme.brand}}>
+                              <Text style={{fontSize:11,fontWeight:'700',color:theme.textMuted}}>Your response</Text>
+                              <Text style={{fontSize:12,color:theme.textMuted,marginTop:2}}>{rev.ownerResponse.text}</Text>
+                            </View>
+                          ) : replyingReviewId === rev.id ? (
+                            <View style={{flexDirection:'row',alignItems:'center',gap:8,marginTop:8}}>
+                              <TextInput style={[styles.input,{flex:1,marginBottom:0}]} placeholder="Write a response..." value={reviewReplyText} onChangeText={setReviewReplyText} autoFocus/>
+                              <TouchableOpacity onPress={() => submitReviewReply(rev.id)}><Text style={{color:theme.brand,fontWeight:'700',fontSize:13}}>Send</Text></TouchableOpacity>
+                            </View>
+                          ) : (
+                            <TouchableOpacity onPress={() => { setReplyingReviewId(rev.id); setReviewReplyText(''); }} style={{marginTop:8}}>
+                              <Text style={{color:theme.brand,fontWeight:'700',fontSize:12}}>Reply</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      ))}
+                    </>
+                  )}
                 </View>
               )}
               <View style={{height:40}}/>
@@ -2607,6 +2698,10 @@ function IGymApp() {
                       <Text style={{fontSize:12,fontWeight:'700',color:theme.textMuted,marginBottom:8,textTransform:'uppercase'}}>✨ Recent AI Workouts</Text>
                       {currentUser.savedWorkouts.map(w => {
                         const expanded = expandedWorkoutId === w.id;
+                        const today = new Date().toISOString().slice(0, 10);
+                        const completions = w.completions || [];
+                        const doneToday = completions.some(c => c.slice(0, 10) === today);
+                        const wStats = computeCheckinStats(completions.map(c => ({created_at: c})));
                         return (
                           <View key={w.id} style={{borderTopWidth:1,borderTopColor:theme.border,paddingTop:10,marginTop:10}}>
                             <TouchableOpacity onPress={() => setExpandedWorkoutId(expanded ? null : w.id)} style={styles.rowJustify}>
@@ -2614,6 +2709,7 @@ function IGymApp() {
                                 <Text style={{fontSize:14,fontWeight:'700',color:theme.text}}>{w.title}</Text>
                                 <Text style={{fontSize:11,color:theme.textMuted,marginTop:2}}>
                                   {w.gymName} · {(w.muscleGroups||[]).join(', ') || 'Full body'} · {new Date(w.createdAt).toLocaleDateString()}
+                                  {wStats.totalVisits > 0 ? ` · ✓ ${wStats.totalVisits}x done${wStats.currentStreak > 1 ? ` · 🔥 ${wStats.currentStreak}-day streak` : ''}` : ''}
                                 </Text>
                               </View>
                               <Text style={{color:theme.textMuted,fontSize:12}}>{expanded ? '▲' : '▼'}</Text>
@@ -2625,9 +2721,16 @@ function IGymApp() {
                                     {i+1}. {ex.name} — {ex.sets} × {ex.reps} ({ex.equipment})
                                   </Text>
                                 ))}
-                                <TouchableOpacity onPress={() => removeSavedWorkout(w.id)}>
-                                  <Text style={{fontSize:12,fontWeight:'700',color:'#FF3B30',marginTop:4}}>Remove</Text>
-                                </TouchableOpacity>
+                                <View style={{flexDirection:'row',gap:16,marginTop:6}}>
+                                  <TouchableOpacity onPress={() => markWorkoutComplete(w.id)} disabled={doneToday}>
+                                    <Text style={{fontSize:12,fontWeight:'700',color: doneToday ? theme.textMuted : '#34C759'}}>
+                                      {doneToday ? '✓ Done today' : 'Mark complete today'}
+                                    </Text>
+                                  </TouchableOpacity>
+                                  <TouchableOpacity onPress={() => removeSavedWorkout(w.id)}>
+                                    <Text style={{fontSize:12,fontWeight:'700',color:'#FF3B30'}}>Remove</Text>
+                                  </TouchableOpacity>
+                                </View>
                               </View>
                             )}
                           </View>
@@ -2774,6 +2877,7 @@ function IGymApp() {
         const gymAvgRating = getAvgRating(selectedGym?.gymReviews);
         const gymOpenStatus = isOpenNow(selectedGym);
         const gymFaved = isFavorite(selectedGym?.id);
+        const similarGyms = selectedGym ? findSimilarGyms(selectedGym, ownerDatabase) : [];
         return (
           <SafeAreaView style={styles.container}>
             <ScrollView style={{flex:1,padding:25}}>
@@ -2944,17 +3048,48 @@ function IGymApp() {
                 </View>
               )}
 
+              {similarGyms.length > 0 && (
+                <>
+                  <Text style={[styles.sectionLabel,{marginTop:20}]}>You might also like</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom:10}}>
+                    {similarGyms.map(g => (
+                      <TouchableOpacity
+                        key={g.id}
+                        onPress={() => { setSelectedGym(g); navigateTo('GYM_DETAIL'); }}
+                        style={[styles.itemCard,{width:180,marginRight:10}]}
+                      >
+                        <Text style={{fontWeight:'800',fontSize:14,color:theme.text}} numberOfLines={1}>{g.gymName}</Text>
+                        <Text style={{fontSize:11,color:theme.textMuted,marginTop:2}} numberOfLines={1}>{g.location}</Text>
+                        {getAvgRating(g.gymReviews) > 0 && (
+                          <Text style={{fontSize:12,color:'#FF9500',marginTop:6}}>★ {getAvgRating(g.gymReviews).toFixed(1)}</Text>
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </>
+              )}
+
               <Text style={[styles.sectionLabel,{marginTop:20}]}>Member Reviews</Text>
               {(selectedGym?.gymReviews||[]).length > 0 ? (selectedGym.gymReviews||[]).map(rev => (
                 <View key={rev.id} style={styles.reviewCard}>
                   <View style={styles.rowJustify}>
-                    <Text style={{fontWeight:'bold'}}>@{rev.username}</Text>
+                    <View style={{flexDirection:'row',alignItems:'center',gap:6}}>
+                      <Text style={{fontWeight:'bold'}}>@{rev.username}</Text>
+                      {!!rev.photoUrl && <Text style={{fontSize:10,fontWeight:'700',color:'#34C759'}}>📷 Photo verified</Text>}
+                    </View>
                     <View style={{flexDirection:'row',alignItems:'center',gap:6}}>
                       <Text style={{color:'#FF9500',fontSize:13}}>{renderStars(rev.rating)}</Text>
                       <Text style={{color:'#999',fontSize:11}}>{new Date(rev.date).toLocaleDateString()}</Text>
                     </View>
                   </View>
                   <Text style={{marginTop:6,color:'#444',lineHeight:20}}>{rev.text}</Text>
+                  {!!rev.photoUrl && <Image source={{uri:rev.photoUrl}} style={{width:80,height:80,borderRadius:10,marginTop:8}}/>}
+                  {!!rev.ownerResponse && (
+                    <View style={{marginTop:8,paddingLeft:10,borderLeftWidth:2,borderLeftColor:theme.brand}}>
+                      <Text style={{fontSize:12,fontWeight:'700',color:'#444'}}>Response from {selectedGym.gymName}</Text>
+                      <Text style={{fontSize:12,color:'#666',marginTop:2}}>{rev.ownerResponse.text}</Text>
+                    </View>
+                  )}
                 </View>
               )) : <Text style={{color:'#888',fontStyle:'italic',marginBottom:10}}>Be the first to review this gym!</Text>}
 
@@ -2966,8 +3101,18 @@ function IGymApp() {
                 ))}
               </View>
               <TextInput style={[styles.input,{height:80,textAlignVertical:'top'}]} placeholder="Share your experience at this gym..." multiline value={gymReviewText} onChangeText={setGymReviewText}/>
-              <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#FF9500',marginBottom:50}]} onPress={submitGymReview}>
-                <Text style={styles.btnText}>Post Gym Review</Text>
+              <View style={{flexDirection:'row',alignItems:'center',gap:10,marginBottom:15}}>
+                {gymReviewPhoto ? (
+                  <Image source={{uri:gymReviewPhoto}} style={{width:44,height:44,borderRadius:8}}/>
+                ) : null}
+                <TouchableOpacity onPress={pickReviewPhoto}>
+                  <Text style={{fontSize:12,fontWeight:'700',color:theme.brand}}>
+                    {gymReviewPhoto ? '📷 Change photo' : '📷 Add a photo (optional)'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#FF9500',marginBottom:50}]} onPress={submitGymReview} disabled={uploadingReviewPhoto}>
+                <Text style={styles.btnText}>{uploadingReviewPhoto ? 'Posting...' : 'Post Gym Review'}</Text>
               </TouchableOpacity>
             </ScrollView>
           </SafeAreaView>
@@ -3182,6 +3327,18 @@ function IGymApp() {
                 )) : <Text style={{color:'#888',fontStyle:'italic',marginBottom:10}}>No reviews yet.</Text>}
                 <TextInput style={[styles.input,{height:80,textAlignVertical:'top'}]} placeholder="How was the equipment?" multiline value={reviewInput} onChangeText={setReviewInput}/>
                 <TouchableOpacity style={styles.primaryBtn} onPress={submitReview}><Text style={styles.btnText}>Post Review</Text></TouchableOpacity>
+
+                <Text style={[styles.sectionLabel,{marginTop:20}]}>⚠ Something wrong with this equipment?</Text>
+                {equipReportSent ? (
+                  <Text style={{color:'#34C759',fontWeight:'700',fontSize:13}}>✓ Thanks — the owner has been notified.</Text>
+                ) : (
+                  <>
+                    <TextInput style={styles.input} placeholder="What's wrong with it?" value={equipReportNote} onChangeText={setEquipReportNote}/>
+                    <TouchableOpacity style={[styles.secondaryBtn,{backgroundColor:'#FF3B30'}]} onPress={submitEquipReport}>
+                      <Text style={styles.btnText}>Report a problem</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
                 <View style={{height:60}}/>
               </ScrollView>
             </KeyboardAvoidingView>

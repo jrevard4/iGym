@@ -1,5 +1,5 @@
 import { loadGyms } from '../../../../lib/supabase';
-import { getAvgRating } from '../../../../lib/helpers';
+import { getAvgRating, findSimilarGyms } from '../../../../lib/helpers';
 import GymDetailClient from './GymDetailClient';
 
 async function findGym(id) {
@@ -53,7 +53,9 @@ function buildStructuredData(gym) {
 
 export default async function GymDetailPage({ params }) {
   const { id } = await params;
-  const gym = await findGym(id);
+  const gyms = await loadGyms();
+  const gym = gyms.find((g) => g.id === id) || null;
+  const similarGyms = gym ? findSimilarGyms(gym, gyms) : [];
   return (
     <>
       {gym && (
@@ -63,7 +65,7 @@ export default async function GymDetailPage({ params }) {
           dangerouslySetInnerHTML={{ __html: buildStructuredData(gym) }}
         />
       )}
-      <GymDetailClient gym={gym} />
+      <GymDetailClient gym={gym} similarGyms={similarGyms} />
     </>
   );
 }

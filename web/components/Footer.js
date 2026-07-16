@@ -10,7 +10,7 @@ export default function Footer() {
       <div className="max-w-6xl mx-auto px-6 py-10 grid sm:grid-cols-3 gap-8 text-sm">
         <div>
           <div className="text-xl font-black mb-2">
-            <span className="text-brand-text">i</span>Gym
+            <span className="text-brand-text dark:text-blue-400">i</span>Gym
           </div>
           <p className="text-gray-600 dark:text-gray-400 leading-relaxed">
             Finding the right gym, for you.
@@ -20,21 +20,21 @@ export default function Footer() {
         <div>
           <div className="font-semibold mb-3 text-gray-900 dark:text-gray-100">For Members</div>
           <ul className="space-y-2 text-gray-600 dark:text-gray-400">
-            <li><a href="/gyms" className="hover:text-brand-text">{t('findGym')}</a></li>
-            <li><a href="/register" className="hover:text-brand-text">Create Account</a></li>
-            <li><a href="/wallet" className="hover:text-brand-text">{t('wallet')}</a></li>
+            <li><a href="/gyms" className="hover:text-brand-text dark:hover:text-blue-400">{t('findGym')}</a></li>
+            <li><a href="/register" className="hover:text-brand-text dark:hover:text-blue-400">Create Account</a></li>
+            <li><a href="/wallet" className="hover:text-brand-text dark:hover:text-blue-400">{t('wallet')}</a></li>
           </ul>
         </div>
 
         <div>
           <div className="font-semibold mb-3 text-gray-900 dark:text-gray-100">{t('forGymOwners')}</div>
           <ul className="space-y-2 text-gray-600 dark:text-gray-400">
-            <li><a href="/owner/login" className="hover:text-brand-text">Owner Portal →</a></li>
+            <li><a href="/owner/login" className="hover:text-brand-text dark:hover:text-blue-400">Owner Portal →</a></li>
             <li>AI photo tools still live in the iGym mobile app</li>
           </ul>
         </div>
       </div>
-      <div className="border-t border-gray-100 dark:border-gray-800 py-5 text-center text-xs text-gray-500 dark:text-gray-500">
+      <div className="border-t border-gray-100 dark:border-gray-800 py-5 text-center text-xs text-gray-500 dark:text-gray-400">
         © {new Date().getFullYear()} iGym. All rights reserved.
       </div>
     </footer>

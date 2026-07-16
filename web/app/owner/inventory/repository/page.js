@@ -24,7 +24,7 @@ export default function SupplierRepositoryPage() {
     return (
       <div>
         <h1 className="text-4xl font-black mb-2">Supplier Catalog</h1>
-        <p className="text-gray-600 dark:text-gray-400 mb-8">Browse real commercial equipment from major manufacturers and add it straight to your inventory.</p>
+        <p className="text-gray-600 dark:text-gray-400 mb-8">Browse real commercial equipment from major manufacturers — add it with a click, or drag a card straight onto your <a href="/owner/inventory" className="text-brand-text dark:text-blue-400 hover:underline">Inventory page</a>.</p>
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {brands.map((brand) => {
@@ -35,16 +35,16 @@ export default function SupplierRepositoryPage() {
                 <button onClick={() => setSelectedBrand(brand)} className="text-left w-full">
                   <div className="flex justify-between items-start mb-2">
                     <span className="font-bold text-lg text-gray-900 dark:text-gray-100">{brand}</span>
-                    <span className="bg-brand/10 text-brand-text text-xs font-bold px-2 py-1 rounded shrink-0">{count} items</span>
+                    <span className="bg-brand/10 text-brand-text dark:text-blue-400 text-xs font-bold px-2 py-1 rounded shrink-0">{count} items</span>
                   </div>
-                  <span className="text-brand-text text-sm font-semibold">Browse in portal →</span>
+                  <span className="text-brand-text dark:text-blue-400 text-sm font-semibold">Browse in portal →</span>
                 </button>
                 {site && (
                   <a
                     href={site.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="block mt-3 text-xs font-semibold text-gray-500 dark:text-gray-500 hover:text-brand-text transition"
+                    className="block mt-3 text-xs font-semibold text-gray-500 dark:text-gray-400 hover:text-brand-text dark:hover:text-blue-400 transition"
                   >
                     🌐 Visit website ↗
                   </a>
@@ -59,7 +59,7 @@ export default function SupplierRepositoryPage() {
 
   return (
     <div>
-      <button onClick={() => setSelectedBrand(null)} className="text-brand-text hover:underline text-sm font-semibold mb-4 block">
+      <button onClick={() => setSelectedBrand(null)} className="text-brand-text dark:text-blue-400 hover:underline text-sm font-semibold mb-4 block">
         ← All brands
       </button>
       <div className="flex justify-between items-start mb-8 flex-wrap gap-2">
@@ -83,17 +83,28 @@ export default function SupplierRepositoryPage() {
         {brandItems.map((item) => {
           const added = addedIds.includes(item.id);
           return (
-            <li key={item.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden">
+            <li
+              key={item.id}
+              draggable
+              onDragStart={(e) => {
+                e.dataTransfer.setData('application/x-igym-equipment', JSON.stringify(item));
+                e.dataTransfer.setData('text/plain', item.name);
+                e.dataTransfer.effectAllowed = 'copy';
+              }}
+              className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl overflow-hidden cursor-grab active:cursor-grabbing hover:shadow-md transition"
+              title="Drag onto the Inventory page to add"
+            >
               {item.image && (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={item.image} alt={item.name} className="w-full h-36 object-cover bg-gray-50 dark:bg-gray-800" />
+                <img src={item.image} alt={item.name} className="w-full h-36 object-cover bg-gray-50 dark:bg-gray-800 pointer-events-none" />
               )}
               <div className="p-4">
                 <div className="flex justify-between items-start gap-2 mb-1">
                   <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{item.name}</div>
-                  <span className="bg-brand/10 text-brand-text text-xs font-bold px-2 py-0.5 rounded shrink-0">{item.category}</span>
+                  <span className="bg-brand/10 text-brand-text dark:text-blue-400 text-xs font-bold px-2 py-0.5 rounded shrink-0">{item.category}</span>
                 </div>
-                <div className="text-xs text-gray-600 dark:text-gray-400 mb-3">Target: {item.targetArea}</div>
+                <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Target: {item.targetArea}</div>
+                <div className="text-[11px] text-gray-400 dark:text-gray-500 mb-3">⠿ Drag onto Inventory, or</div>
                 <button
                   onClick={() => addToInventory(item)}
                   disabled={added}

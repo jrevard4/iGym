@@ -3,11 +3,12 @@
 import Link from 'next/link';
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getAvgRating, renderStars, isOpenNow, getActivePromotion, uniqueId } from '../../../../lib/helpers';
+import { getAvgRating, renderStars, isOpenNow, getActivePromotion, uniqueId, buildWorkoutICS } from '../../../../lib/helpers';
 import { EQUIP_CATEGORIES, PLATFORM_FEE_RATE, MUSCLE_GROUPS, EXPERIENCE_LEVELS } from '../../../../lib/constants';
-import { upsertUser } from '../../../../lib/supabase';
+import { upsertUser, addGymReview, uploadReviewPhoto, reportEquipmentIssue } from '../../../../lib/supabase';
 import { getSession, setSession } from '@/lib/auth';
 import { useT } from '@/lib/PreferencesContext';
+import GymCard from '@/components/GymCard';
 
 function buildCheckoutUrl(gym, pass, ref) {
   const params = new URLSearchParams({
@@ -21,15 +22,18 @@ function buildCheckoutUrl(gym, pass, ref) {
   return `/checkout/${gym.id}?${params.toString()}`;
 }
 
-export default function GymDetailClient({ gym }) {
+export default function GymDetailClient({ gym, similarGyms }) {
   return (
     <Suspense fallback={<div className="max-w-4xl mx-auto px-6 py-20 text-center text-gray-400">Loading...</div>}>
-      <GymDetailClientInner gym={gym} />
+      <GymDetailClientInner gym={gym} similarGyms={similarGyms} />
     </Suspense>
   );
 }
 
-function GymDetailClientInner({ gym }) {
+function GymDetailClientInner({ gym: initialGym, similarGyms = [] }) {
+  // Local mirror of the gym prop so review/report submissions can update the
+  // page immediately without a full reload — see submitReview/reportIssue.
+  const [gym, setGym] = useState(initialGym);
   const [equipFilter, setEquipFilter] = useState('All');
   const [shared, setShared] = useState(false);
   const searchParams = useSearchParams();
@@ -40,7 +44,7 @@ function GymDetailClientInner({ gym }) {
     return (
       <div className="max-w-4xl mx-auto px-6 py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Gym not found</h1>
-        <Link href="/gyms" className="text-brand-text hover:underline">{t('backToAllGyms')}</Link>
+        <Link href="/gyms" className="text-brand-text dark:text-blue-400 hover:underline">{t('backToAllGyms')}</Link>
       </div>
     );
   }
@@ -73,7 +77,7 @@ function GymDetailClientInner({ gym }) {
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-10">
-      <Link href="/gyms" className="text-brand-text hover:underline text-sm font-semibold">
+      <Link href="/gyms" className="text-brand-text dark:text-blue-400 hover:underline text-sm font-semibold">
         {t('backToAllGyms')}
       </Link>
 
@@ -94,7 +98,7 @@ function GymDetailClientInner({ gym }) {
             </span>
           )}
           {claimed && (
-            <span className="bg-blue-50 dark:bg-blue-950 text-brand-text text-xs font-extrabold px-2 py-1 rounded">
+            <span className="bg-blue-50 dark:bg-blue-950 text-brand-text dark:text-blue-400 text-xs font-extrabold px-2 py-1 rounded">
               ✓ {t('verified')}
             </span>
           )}
@@ -103,21 +107,21 @@ function GymDetailClientInner({ gym }) {
             onClick={shareMatch}
             aria-label={t('shareMatch')}
             title={t('shareMatch')}
-            className="text-gray-400 dark:text-gray-500 hover:text-brand-text transition text-lg"
+            className="text-gray-400 dark:text-gray-400 hover:text-brand-text dark:hover:text-blue-400 transition text-lg"
           >
             {shared ? '✓' : '🔗'}
           </button>
         </div>
         <p className="text-gray-600 dark:text-gray-400">{gym.location}</p>
         {!claimed && (
-          <Link href={`/owner/claim/${gym.id}`} className="inline-block mt-2 text-xs font-semibold text-gray-500 dark:text-gray-500 hover:text-brand-text transition">
+          <Link href={`/owner/claim/${gym.id}`} className="inline-block mt-2 text-xs font-semibold text-gray-500 dark:text-gray-400 hover:text-brand-text dark:hover:text-blue-400 transition">
             {t('claimListing')}
           </Link>
         )}
       </div>
 
       {promo && (
-        <div className="bg-brand/10 text-brand-text font-bold text-sm px-4 py-3 rounded-xl mb-6">
+        <div className="bg-brand/10 text-brand-text dark:text-blue-400 font-bold text-sm px-4 py-3 rounded-xl mb-6">
           🔥 {promo.title}
           {promo.detail && <span className="font-normal"> — {promo.detail}</span>}
         </div>
@@ -156,22 +160,22 @@ function GymDetailClientInner({ gym }) {
           <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-500 font-bold">Phone</div>
+                <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-bold">Phone</div>
                 <div className="text-gray-900 dark:text-gray-100 mt-1">{gym.phone || '—'}</div>
               </div>
               <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-500 font-bold">Pricing</div>
+                <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-bold">Pricing</div>
                 <div className="text-gray-900 dark:text-gray-100 mt-1">{gym.pricing || '—'}</div>
               </div>
               {gym.hoursDisplay && (
                 <div className="sm:col-span-2">
-                  <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-500 font-bold">Hours</div>
+                  <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 font-bold">Hours</div>
                   <div className="text-gray-900 dark:text-gray-100 mt-1">{gym.hoursDisplay}</div>
                 </div>
               )}
               {gym.website && (
                 <div className="sm:col-span-2">
-                  <a href={gym.website} target="_blank" rel="noopener" className="text-brand-text hover:underline text-sm font-semibold">
+                  <a href={gym.website} target="_blank" rel="noopener" className="text-brand-text dark:text-blue-400 hover:underline text-sm font-semibold">
                     {t('visitWebsite')}
                   </a>
                 </div>
@@ -189,7 +193,7 @@ function GymDetailClientInner({ gym }) {
         {/* Passes column — hidden only when every pass on offer is already shown above as a membership tier */}
         {!(otherPasses.length === 0 && membershipTiers.length > 0) && (
           <div className="space-y-3">
-            <h2 className="text-sm font-bold text-gray-500 dark:text-gray-500 uppercase tracking-wide">🎟️ {t('accessPasses')}</h2>
+            <h2 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">🎟️ {t('accessPasses')}</h2>
             {otherPasses.length > 0 ? (
               otherPasses.map((pass) => <PassCard key={pass.id} pass={pass} gym={gym} referralCode={ref} />)
             ) : allPasses.length === 0 && gym.dayPassPrice > 0 ? (
@@ -214,7 +218,7 @@ function GymDetailClientInner({ gym }) {
       {/* Equipment */}
       <section className="mb-10">
         <h2 className="text-2xl font-bold mb-4">
-          {t('equipment')} <span className="text-gray-400 dark:text-gray-500 font-normal">({equipment.length})</span>
+          {t('equipment')} <span className="text-gray-400 dark:text-gray-400 font-normal">({equipment.length})</span>
         </h2>
 
         <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Filter equipment by category">
@@ -236,35 +240,11 @@ function GymDetailClientInner({ gym }) {
         </div>
 
         {equipment.length === 0 ? (
-          <p className="text-gray-500 dark:text-gray-500 italic">No equipment in this category.</p>
+          <p className="text-gray-500 dark:text-gray-400 italic">No equipment in this category.</p>
         ) : (
           <ul className="grid sm:grid-cols-2 gap-3">
             {equipment.map((eq) => (
-              <li key={eq.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
-                <div className="flex justify-between items-start gap-2 mb-1">
-                  <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{eq.name}</div>
-                  <span className="bg-brand/10 text-brand-text text-xs font-bold px-2 py-0.5 rounded shrink-0">
-                    {eq.category}
-                  </span>
-                </div>
-                <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Target: {eq.targetArea}</div>
-                {eq.outOfService && (
-                  <div className="text-xs font-bold text-danger mb-1">⚠ Temporarily out of service</div>
-                )}
-                {eq.instructions && (
-                  <div className="text-xs text-gray-500 dark:text-gray-500 line-clamp-2">{eq.instructions}</div>
-                )}
-                {eq.videoUrl && (
-                  <a
-                    href={eq.videoUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-block mt-2 text-xs font-semibold text-brand-text hover:underline"
-                  >
-                    ▶ Watch demo ↗
-                  </a>
-                )}
-              </li>
+              <EquipmentCard key={eq.id} eq={eq} gym={gym} />
             ))}
           </ul>
         )}
@@ -273,26 +253,196 @@ function GymDetailClientInner({ gym }) {
       {/* AI Workout Generator */}
       <WorkoutGeneratorSection gym={gym} />
 
+      {/* Similar gyms */}
+      {similarGyms.length > 0 && (
+        <section className="mb-10">
+          <h2 className="text-2xl font-bold mb-4">You might also like</h2>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {similarGyms.map((g) => <GymCard key={g.id} gym={g} />)}
+          </div>
+        </section>
+      )}
+
       {/* Reviews */}
       <section>
         <h2 className="text-2xl font-bold mb-4">{t('memberReviews')}</h2>
         {(gym.gymReviews || []).length === 0 ? (
-          <p className="text-gray-500 dark:text-gray-500 italic">Be the first to review this gym!</p>
+          <p className="text-gray-500 dark:text-gray-400 italic mb-4">Be the first to review this gym!</p>
         ) : (
-          <ul className="space-y-3">
+          <ul className="space-y-3 mb-4">
             {gym.gymReviews.map((r) => (
               <li key={r.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
                 <div className="flex justify-between items-center mb-2">
-                  <span className="font-bold text-sm text-gray-900 dark:text-gray-100">@{r.username}</span>
+                  <span className="font-bold text-sm text-gray-900 dark:text-gray-100">
+                    @{r.username}
+                    {r.photoUrl && <span className="ml-2 text-[10px] font-bold text-success align-middle">📷 Photo verified</span>}
+                  </span>
                   <span className="text-warning text-sm">{renderStars(r.rating)}</span>
                 </div>
                 <p className="text-sm text-gray-700 dark:text-gray-300">{r.text}</p>
+                {r.photoUrl && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={r.photoUrl} alt="" className="mt-2 w-24 h-24 rounded-lg object-cover border border-gray-200 dark:border-gray-700" />
+                )}
+                {r.ownerResponse && (
+                  <div className="mt-3 pl-3 border-l-2 border-brand/30 dark:border-blue-400/30">
+                    <div className="text-xs font-bold text-gray-700 dark:text-gray-300">Response from {gym.gymName}</div>
+                    <p className="text-xs text-gray-600 dark:text-gray-400 mt-0.5">{r.ownerResponse.text}</p>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
         )}
+        <ReviewForm gym={gym} onSubmitted={(updatedGym) => setGym(updatedGym)} />
       </section>
     </div>
+  );
+}
+
+// ─── Review submission form ───────────────────────────────────────────────
+function ReviewForm({ gym, onSubmitted }) {
+  const session = getSession();
+  const [rating, setRating] = useState(5);
+  const [text, setText] = useState('');
+  const [photo, setPhoto] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
+  const [done, setDone] = useState(false);
+
+  if (!session) {
+    return (
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        <Link href={`/login?next=/gyms/${gym.id}`} className="text-brand-text dark:text-blue-400 hover:underline font-semibold">Log in</Link> to leave a review.
+      </p>
+    );
+  }
+
+  if (done) {
+    return <p className="text-sm text-success font-semibold">✓ Thanks for sharing your experience!</p>;
+  }
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!text.trim()) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      let photoUrl = null;
+      if (photo) photoUrl = await uploadReviewPhoto(photo);
+      const review = {
+        id: uniqueId('gr_'), userId: session.id, username: session.username,
+        rating, text: text.trim(), date: new Date().toISOString(),
+        ...(photoUrl && { photoUrl }),
+      };
+      await addGymReview(gym.id, review);
+      onSubmitted({ ...gym, gymReviews: [review, ...(gym.gymReviews || [])] });
+      setDone(true);
+    } catch (err) {
+      setError(err.message || 'Could not post your review.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 space-y-3">
+      <h3 className="font-bold text-sm text-gray-900 dark:text-gray-100">Leave a review</h3>
+      <div className="flex gap-1" role="group" aria-label="Rating">
+        {[1, 2, 3, 4, 5].map((n) => (
+          <button key={n} type="button" onClick={() => setRating(n)} aria-label={`${n} star${n === 1 ? '' : 's'}`} className="text-2xl leading-none">
+            {rating >= n ? '★' : '☆'}
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        placeholder="Share your experience at this gym..."
+        className="w-full px-3.5 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg text-sm focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
+      />
+      <div>
+        <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 block mb-1">Add a photo (optional) — builds trust with other members</label>
+        <input type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] || null)} className="text-xs text-gray-700 dark:text-gray-300" />
+      </div>
+      {error && <p className="text-xs text-danger">{error}</p>}
+      <button type="submit" disabled={submitting || !text.trim()} className="bg-brand hover:bg-brand-dark text-white text-sm font-semibold px-4 py-2 rounded-lg transition disabled:opacity-60">
+        {submitting ? 'Posting...' : 'Post review'}
+      </button>
+    </form>
+  );
+}
+
+// ─── Equipment card (member view) ──────────────────────────────────────────
+function EquipmentCard({ eq, gym }) {
+  const [reporting, setReporting] = useState(false);
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const submitReport = async (e) => {
+    e.preventDefault();
+    if (!note.trim()) return;
+    setSubmitting(true);
+    try {
+      const session = getSession();
+      await reportEquipmentIssue(gym.id, eq.id, note.trim(), session?.username);
+      setDone(true);
+      setReporting(false);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <li className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+      <div className="flex justify-between items-start gap-2 mb-1">
+        <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{eq.name}</div>
+        <span className="bg-brand/10 text-brand-text dark:text-blue-400 text-xs font-bold px-2 py-0.5 rounded shrink-0">
+          {eq.category}
+        </span>
+      </div>
+      <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Target: {eq.targetArea}</div>
+      {eq.outOfService && (
+        <div className="text-xs font-bold text-danger mb-1">⚠ Temporarily out of service</div>
+      )}
+      {eq.instructions && (
+        <div className="text-xs text-gray-500 dark:text-gray-400 line-clamp-2">{eq.instructions}</div>
+      )}
+      {eq.videoUrl && (
+        <a
+          href={eq.videoUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block mt-2 text-xs font-semibold text-brand-text dark:text-blue-400 hover:underline"
+        >
+          ▶ Watch demo ↗
+        </a>
+      )}
+
+      <div className="mt-2 pt-2 border-t border-gray-100 dark:border-gray-800">
+        {done ? (
+          <p className="text-xs text-success font-semibold">✓ Thanks — the owner has been notified.</p>
+        ) : reporting ? (
+          <form onSubmit={submitReport} className="flex gap-2">
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="What's wrong with it?"
+              autoFocus
+              className="flex-1 px-2 py-1 text-xs border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded outline-none focus:border-brand"
+            />
+            <button type="submit" disabled={submitting || !note.trim()} className="text-xs font-semibold text-brand-text dark:text-blue-400 disabled:opacity-60">Send</button>
+            <button type="button" onClick={() => setReporting(false)} className="text-xs text-gray-400">✕</button>
+          </form>
+        ) : (
+          <button onClick={() => setReporting(true)} className="text-xs font-semibold text-gray-400 dark:text-gray-500 hover:text-danger transition">
+            ⚠ Report a problem
+          </button>
+        )}
+      </div>
+    </li>
   );
 }
 
@@ -359,7 +509,7 @@ function MembershipTierCard({ tier, gym, referralCode }) {
       <div className="font-black text-lg text-gray-900 dark:text-gray-100">{tier.label}</div>
       <div className="text-3xl font-black mt-1 text-gray-900 dark:text-gray-100">
         ${Number(tier.price).toFixed(2)}
-        <span className="text-sm font-semibold text-gray-500 dark:text-gray-500">
+        <span className="text-sm font-semibold text-gray-500 dark:text-gray-400">
           {' '}/ {Number(tier.value) === 30 ? 'mo' : `${tier.value} days`}
         </span>
       </div>
@@ -443,7 +593,7 @@ function WorkoutGeneratorSection({ gym }) {
   return (
     <section className="mb-10">
       <h2 className="text-2xl font-bold mb-1">✨ AI Workout Generator</h2>
-      <p className="text-sm text-gray-500 dark:text-gray-500 mb-4">
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
         Builds a workout using only the equipment {gym.gymName} actually has.
       </p>
 
@@ -458,7 +608,7 @@ function WorkoutGeneratorSection({ gym }) {
                 type="button"
                 onClick={() => toggleMuscle(m)}
                 aria-pressed={active}
-                className={'px-3 py-1.5 rounded-full text-xs font-semibold transition ' + (active ? 'bg-white text-brand-text' : 'bg-white/15 text-white hover:bg-white/25')}
+                className={'px-3 py-1.5 rounded-full text-xs font-semibold transition ' + (active ? 'bg-white text-brand-text dark:text-blue-400' : 'bg-white/15 text-white hover:bg-white/25')}
               >
                 {m}
               </button>
@@ -488,7 +638,7 @@ function WorkoutGeneratorSection({ gym }) {
         <button
           onClick={generate}
           disabled={loading}
-          className="bg-white text-brand-text font-bold px-6 py-3 rounded-lg hover:bg-white/90 transition disabled:opacity-60"
+          className="bg-white text-brand-text dark:text-blue-400 font-bold px-6 py-3 rounded-lg hover:bg-white/90 transition disabled:opacity-60"
         >
           {loading ? 'Building your workout...' : 'Generate Workout'}
         </button>
@@ -500,7 +650,7 @@ function WorkoutGeneratorSection({ gym }) {
           <div className="flex justify-between items-start gap-3 mb-2">
             <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">{plan.title}</h3>
             {plan.estimatedDuration && (
-              <span className="bg-brand/10 text-brand-text text-xs font-bold px-2.5 py-1 rounded shrink-0">
+              <span className="bg-brand/10 text-brand-text dark:text-blue-400 text-xs font-bold px-2.5 py-1 rounded shrink-0">
                 ⏱ {plan.estimatedDuration}
               </span>
             )}
@@ -520,19 +670,39 @@ function WorkoutGeneratorSection({ gym }) {
                   Target: {ex.targetMuscle} · {ex.sets} sets × {ex.reps}{ex.restSeconds ? ` · rest ${ex.restSeconds}s` : ''}
                 </div>
                 {ex.instructions && (
-                  <div className="text-xs text-gray-500 dark:text-gray-500">{ex.instructions}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">{ex.instructions}</div>
                 )}
               </li>
             ))}
           </ul>
 
           {plan.notes && (
-            <p className="text-xs text-gray-500 dark:text-gray-500 mt-4 italic">{plan.notes}</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-4 italic">{plan.notes}</p>
           )}
+
+          <button
+            onClick={() => downloadICS(plan)}
+            className="mt-4 text-xs font-semibold text-brand-text dark:text-blue-400 hover:underline"
+          >
+            📅 Add to calendar
+          </button>
         </div>
       )}
     </section>
   );
+}
+
+function downloadICS(workout) {
+  const ics = buildWorkoutICS(workout);
+  const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${(workout.title || 'workout').replace(/[^a-z0-9]+/gi, '-')}.ics`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ─── Referral share button ────────────────────────────────────────────────

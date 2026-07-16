@@ -78,9 +78,9 @@ export default function OwnerDeskPage() {
         </button>
       </form>
 
-      <h2 className="text-sm font-bold text-gray-500 dark:text-gray-500 uppercase tracking-wide mb-3">Today's check-ins ({log.filter((e) => e.status === 'GRANTED').length})</h2>
+      <h2 className="text-sm font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-3">Today's check-ins ({log.filter((e) => e.status === 'GRANTED').length})</h2>
       {log.length === 0 ? (
-        <p className="text-gray-400 dark:text-gray-600 italic">No scans this session.</p>
+        <p className="text-gray-400 dark:text-gray-400 italic">No scans this session.</p>
       ) : (
         <ul className="space-y-2 max-w-lg">
           {log.map((e, i) => {
@@ -89,9 +89,9 @@ export default function OwnerDeskPage() {
               <li key={i} className={'bg-white dark:bg-gray-900 border-l-4 rounded-lg px-4 py-3 ' + (granted ? 'border-success' : 'border-danger')}>
                 <div className="flex justify-between text-sm">
                   <span className="font-bold text-gray-900 dark:text-gray-100">{granted ? '🟢' : '🔴'} {e.passId}</span>
-                  <span className="text-gray-400 dark:text-gray-600">{e.time}</span>
+                  <span className="text-gray-400 dark:text-gray-400">{e.time}</span>
                 </div>
-                <div className="text-xs text-gray-500 dark:text-gray-500 mt-1">{e.note}</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">{e.note}</div>
               </li>
             );
           })}
