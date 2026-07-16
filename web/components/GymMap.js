@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import 'leaflet/dist/leaflet.css';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
@@ -35,7 +35,7 @@ export default function GymMap({ gyms, userLoc }) {
               <div className="text-sm">
                 <div className="font-bold mb-1">{gym.gymName}</div>
                 <div className="text-gray-500 mb-2">{gym.location}</div>
-                <Link href={`/gyms/${gym.id}`} className="text-brand font-semibold hover:underline">
+                <Link href={`/gyms/${gym.id}`} className="text-brand-text font-semibold hover:underline">
                   View gym →
                 </Link>
               </div>

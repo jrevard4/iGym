@@ -40,7 +40,7 @@ function GymDetailClientInner({ gym }) {
     return (
       <div className="max-w-4xl mx-auto px-6 py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Gym not found</h1>
-        <Link href="/gyms" className="text-brand hover:underline">{t('backToAllGyms')}</Link>
+        <Link href="/gyms" className="text-brand-text hover:underline">{t('backToAllGyms')}</Link>
       </div>
     );
   }
@@ -73,7 +73,7 @@ function GymDetailClientInner({ gym }) {
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-10">
-      <Link href="/gyms" className="text-brand hover:underline text-sm font-semibold">
+      <Link href="/gyms" className="text-brand-text hover:underline text-sm font-semibold">
         {t('backToAllGyms')}
       </Link>
 
@@ -171,7 +171,7 @@ function GymDetailClientInner({ gym }) {
               )}
               {gym.website && (
                 <div className="sm:col-span-2">
-                  <a href={gym.website} target="_blank" rel="noopener" className="text-brand hover:underline text-sm font-semibold">
+                  <a href={gym.website} target="_blank" rel="noopener" className="text-brand-text hover:underline text-sm font-semibold">
                     {t('visitWebsite')}
                   </a>
                 </div>
@@ -259,7 +259,7 @@ function GymDetailClientInner({ gym }) {
                     href={eq.videoUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-block mt-2 text-xs font-semibold text-brand hover:underline"
+                    className="inline-block mt-2 text-xs font-semibold text-brand-text hover:underline"
                   >
                     ▶ Watch demo ↗
                   </a>

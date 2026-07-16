@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { Suspense, useEffect, useState } from 'react';
@@ -64,7 +64,7 @@ function OwnerBillingReturnPageInner() {
       <div className="max-w-md mx-auto py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Payment not completed</h1>
         <p className="text-gray-600 dark:text-gray-400 mb-6">{error}</p>
-        <Link href="/owner/analytics" className="text-brand hover:underline">← Back to Analytics</Link>
+        <Link href="/owner/analytics" className="text-brand-text hover:underline">← Back to Analytics</Link>
       </div>
     );
   }

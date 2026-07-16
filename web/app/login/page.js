@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -109,7 +109,7 @@ function LoginForm() {
           >
             {busy ? t('processing') : t('continueAsGuest')}
           </button>
-          <button type="button" onClick={() => setGuestMode(false)} className="w-full text-center text-sm text-gray-500 dark:text-gray-500 hover:text-brand transition">
+          <button type="button" onClick={() => setGuestMode(false)} className="w-full text-center text-sm text-gray-500 dark:text-gray-500 hover:text-brand-text transition">
             ← Back to sign in
           </button>
         </form>
@@ -156,7 +156,7 @@ function LoginForm() {
             <button
               type="button"
               onClick={() => setGuestMode(true)}
-              className="w-full mt-3 text-center text-sm font-semibold text-brand hover:underline"
+              className="w-full mt-3 text-center text-sm font-semibold text-brand-text hover:underline"
             >
               {t('continueAsGuest')} →
             </button>
@@ -164,7 +164,7 @@ function LoginForm() {
 
           <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
             {t('dontHaveAccount')}{' '}
-            <Link href="/register" className="text-brand hover:underline font-semibold">
+            <Link href="/register" className="text-brand-text hover:underline font-semibold">
               Create an account
             </Link>
           </p>

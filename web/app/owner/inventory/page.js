@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { useState } from 'react';
@@ -145,7 +145,7 @@ export default function OwnerInventoryPage() {
             <input type="file" accept="image/*" onChange={onPhotoPicked} className="text-xs text-gray-700 dark:text-gray-300" />
           </div>
           {uploadingField === 'image' && <p className="text-xs text-gray-400 dark:text-gray-600 mt-1">Uploading photo...</p>}
-          {scanning && <p className="text-xs text-brand mt-1">✨ Scanning with AI to auto-fill fields below...</p>}
+          {scanning && <p className="text-xs text-brand-text mt-1">✨ Scanning with AI to auto-fill fields below...</p>}
           {scanError && <p className="text-xs text-danger mt-1">{scanError}</p>}
         </div>
 
@@ -234,7 +234,7 @@ export default function OwnerInventoryPage() {
               <div className="p-4">
                 <div className="flex justify-between items-start gap-2 mb-1">
                   <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{eq.name}</div>
-                  <span className="bg-brand/10 text-brand text-xs font-bold px-2 py-0.5 rounded shrink-0">{eq.category}</span>
+                  <span className="bg-brand/10 text-brand-text text-xs font-bold px-2 py-0.5 rounded shrink-0">{eq.category}</span>
                 </div>
                 <div className="text-xs text-gray-600 dark:text-gray-400 mb-1">Target: {eq.targetArea || '—'}</div>
                 {eq.outOfService && (
@@ -246,7 +246,7 @@ export default function OwnerInventoryPage() {
                   <div key={i} className="text-xs font-bold text-amber-700 dark:text-amber-500 mb-2">⚠ {a.message.split(': ')[1]}</div>
                 ))}
                 <div className="flex gap-3 text-xs font-semibold">
-                  <button onClick={() => startEdit(eq)} className="text-brand hover:underline">Edit</button>
+                  <button onClick={() => startEdit(eq)} className="text-brand-text hover:underline">Edit</button>
                   <button onClick={() => remove(eq.id)} className="text-danger hover:underline">Delete</button>
                 </div>
               </div>
