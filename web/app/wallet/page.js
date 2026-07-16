@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { getSession, setSession } from '@/lib/auth';
-import { loadUserPasses, loadUserCheckins, getUserById, upsertUser } from '../../../lib/supabase';
+import { loadUserPasses, loadUserCheckins, getUserById, upsertUser, updatePass, loadUserClassBookings, cancelClassBooking } from '../../../lib/supabase';
 import { computeCheckinStats, buildWorkoutICS } from '../../../lib/helpers';
+import env from '../../../lib/env';
 
 function downloadICS(workout) {
   const ics = buildWorkoutICS(workout);
@@ -27,7 +28,9 @@ export default function WalletPage() {
   const [user, setUser] = useState(null);
   const [passes, setPasses] = useState([]);
   const [checkins, setCheckins] = useState([]);
+  const [classBookings, setClassBookings] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [cancelingId, setCancelingId] = useState(null);
 
   useEffect(() => {
     const session = getSession();
@@ -42,13 +45,15 @@ export default function WalletPage() {
     // people made using this member's shared link (the cached session won't).
     (async () => {
       try {
-        const [fresh, checkinRows, freshUser] = await Promise.all([
+        const [fresh, checkinRows, freshUser, bookings] = await Promise.all([
           loadUserPasses(session.id),
           loadUserCheckins(session.id),
           getUserById(session.id),
+          loadUserClassBookings(session.id),
         ]);
         setPasses(fresh);
         setCheckins(checkinRows);
+        setClassBookings(bookings);
         const merged = { ...session, ...(freshUser || {}), activePasses: fresh };
         setUser(merged);
         setSession(merged);
@@ -59,6 +64,40 @@ export default function WalletPage() {
       }
     })();
   }, [router]);
+
+  const cancelMembership = async (pass) => {
+    if (!confirm(`Cancel auto-renew for ${pass.label}? You'll keep access until it expires on ${new Date(pass.expiresAt).toLocaleDateString()}.`)) return;
+    setCancelingId(pass.id);
+    try {
+      await fetch(`${env.BACKEND_URL}/cancel-subscription`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscriptionId: pass.stripeSubscriptionId }),
+      });
+      await updatePass(pass.id, { status: 'canceled' });
+      setPasses((prev) => prev.map((p) => (p.id === pass.id ? { ...p, status: 'canceled' } : p)));
+    } catch (err) {
+      alert(err.message || 'Could not cancel — please try again.');
+    } finally {
+      setCancelingId(null);
+    }
+  };
+
+  const cancelBooking = async (booking) => {
+    if (!confirm(`Cancel your spot in ${booking.className}?`)) return;
+    await cancelClassBooking(booking.id);
+    setClassBookings((prev) => prev.filter((b) => b.id !== booking.id));
+  };
+
+  // The referral/workouts sections only mount once loading finishes, so the
+  // browser's native "scroll to #hash on load" already ran (and found
+  // nothing) by the time they exist — nav links like Header's "Invite &
+  // Earn" (/wallet#referral) need this manual retry once the DOM has caught up.
+  useEffect(() => {
+    if (loading || !window.location.hash) return;
+    const el = document.getElementById(window.location.hash.slice(1));
+    el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [loading]);
 
   if (loading || !user) {
     return (
@@ -77,10 +116,10 @@ export default function WalletPage() {
 
       {checkins.length > 0 && <StreakCard checkins={checkins} />}
 
-      {user.referralCode && <ReferralCard user={user} />}
+      {user.referralCode && <div id="referral"><ReferralCard user={user} /></div>}
 
       {(user.savedWorkouts || []).length > 0 && (
-        <WorkoutHistoryCard user={user} onChange={(updated) => setUser(updated)} />
+        <div id="workouts"><WorkoutHistoryCard user={user} onChange={(updated) => setUser(updated)} /></div>
       )}
 
       {passes.length === 0 ? (
@@ -144,6 +183,26 @@ export default function WalletPage() {
                     </div>
                   )}
                 </div>
+                {pass.stripeSubscriptionId && !expired && (
+                  <div className="mt-3 pt-3 border-t border-gray-100 flex items-center justify-between gap-2 flex-wrap">
+                    {pass.status === 'canceled' ? (
+                      <span className="text-xs font-semibold text-gray-500">Auto-renew canceled — access ends on expiry</span>
+                    ) : pass.status === 'past_due' ? (
+                      <span className="text-xs font-semibold text-danger">⚠ Last payment failed — update your card to keep this membership</span>
+                    ) : (
+                      <span className="text-xs font-semibold text-brand-text dark:text-blue-400">🔁 Auto-renews every {pass.value} day(s)</span>
+                    )}
+                    {pass.status !== 'canceled' && (
+                      <button
+                        onClick={() => cancelMembership(pass)}
+                        disabled={cancelingId === pass.id}
+                        className="text-xs font-semibold text-danger hover:underline disabled:opacity-60"
+                      >
+                        {cancelingId === pass.id ? 'Canceling...' : 'Cancel auto-renew'}
+                      </button>
+                    )}
+                  </div>
+                )}
                 <div className="mt-4 pt-3 border-t border-gray-100 font-mono text-xs text-gray-500 break-all">
                   {pass.id}
                 </div>
@@ -151,6 +210,26 @@ export default function WalletPage() {
             );
           })}
         </ul>
+      )}
+
+      {classBookings.length > 0 && (
+        <div className="mt-8">
+          <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-3">📅 Booked Classes</h2>
+          <ul className="space-y-2">
+            {classBookings.map((b) => (
+              <li key={b.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4 flex justify-between items-center gap-3">
+                <div>
+                  <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{b.className}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {new Date(b.classDate).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                    {b.status === 'waitlisted' && <span className="ml-2 font-semibold text-warning">Waitlisted</span>}
+                  </div>
+                </div>
+                <button onClick={() => cancelBooking(b)} className="text-xs font-semibold text-danger hover:underline shrink-0">Cancel</button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   );

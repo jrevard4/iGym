@@ -16,7 +16,7 @@ export function parseLocalDate(value) {
   return new Date(value);
 }
 
-export async function finalizePassPurchase({ gym, pass, userId, stripePaymentId, startsAt, referralCode }) {
+export async function finalizePassPurchase({ gym, pass, userId, stripePaymentId, startsAt, referralCode, stripeSubscriptionId, stripeCustomerId }) {
   const startDate = parseLocalDate(startsAt);
   let expiresAt = null;
   let remainingPunches = null;
@@ -49,6 +49,7 @@ export async function finalizePassPurchase({ gym, pass, userId, stripePaymentId,
     remainingPunches,
     totalPunches: remainingPunches,
     stripePaymentId: stripePaymentId || 'demo',
+    ...(stripeSubscriptionId && { stripeSubscriptionId, stripeCustomerId, status: 'active' }),
   };
 
   await savePass(newPass, userId);

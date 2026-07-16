@@ -34,6 +34,11 @@ export default function Header() {
         <nav className="hidden sm:flex items-center gap-6 text-sm font-medium text-gray-700 dark:text-gray-300">
           <Link href="/gyms" className="hover:text-brand-text dark:hover:text-blue-400">{t('findGym')}</Link>
           {user && <Link href="/wallet" className="hover:text-brand-text dark:hover:text-blue-400">{t('wallet')}</Link>}
+          {/* Secondary links — kept off the nav below lg so the existing sm+ pair above never wraps. */}
+          <Link href="/gyms/city" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">Browse by City</Link>
+          {user && <Link href="/wallet#workouts" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">My Workouts</Link>}
+          {user && <Link href="/wallet#referral" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">Invite &amp; Earn</Link>}
+          <Link href="/owner/login" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">Owner Portal</Link>
         </nav>
         <div className="flex items-center gap-3">
           <button

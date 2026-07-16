@@ -61,11 +61,13 @@ function CheckoutPageInner() {
   const [gym, setGym] = useState(null);
   const [loadingGym, setLoadingGym] = useState(true);
   const [clientSecret, setClientSecret] = useState(null);
+  const [subscription, setSubscription] = useState(null); // { subscriptionId, customerId } — MEMBERSHIP passes only
   const [demoMode, setDemoMode] = useState(false);
   const [setupError, setSetupError] = useState('');
   const [purchasedPass, setPurchasedPass] = useState(null);
   const [finalizing, setFinalizing] = useState(false);
   const [startsAt, setStartsAt] = useState(todayISODate());
+  const isMembership = pass.type === 'MEMBERSHIP';
 
   useEffect(() => {
     const s = getSession();
@@ -96,7 +98,8 @@ function CheckoutPageInner() {
         return;
       }
       try {
-        const res = await fetch(`${env.BACKEND_URL}/create-payment-intent`, {
+        const endpoint = isMembership ? 'create-subscription' : 'create-payment-intent';
+        const res = await fetch(`${env.BACKEND_URL}/${endpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -105,17 +108,20 @@ function CheckoutPageInner() {
             passLabel: pass.label,
             gymId: gym.id,
             userId: session.id,
+            email: session.email,
+            billingIntervalDays: pass.value,
           }),
         });
         const json = await res.json();
         if (json.error) throw new Error(json.error);
         setClientSecret(json.clientSecret);
+        if (json.subscriptionId) setSubscription({ subscriptionId: json.subscriptionId, customerId: json.customerId });
       } catch (err) {
         console.warn('Backend unreachable, falling back to demo mode:', err.message);
         setDemoMode(true);
       }
     })();
-  }, [session, gym, pass.price, pass.label]);
+  }, [session, gym, pass.price, pass.label, pass.value, isMembership]);
 
   const handleDemoPurchase = async () => {
     setFinalizing(true);
@@ -200,6 +206,11 @@ function CheckoutPageInner() {
         <div className="text-xs text-gray-500 border-t border-gray-100 pt-2 mt-2">
           {gym.gymName} receives ${gymGets.toFixed(2)} after 12% iGym fee
         </div>
+        {isMembership && (
+          <div className="text-xs font-semibold text-brand-text dark:text-blue-400 mt-2">
+            🔁 Recurring membership — ${pass.price.toFixed(2)} billed automatically every {pass.value} day(s). Cancel anytime from your Wallet.
+          </div>
+        )}
         <label className="block mt-3 pt-3 border-t border-gray-100">
           <span className="text-xs uppercase tracking-wide text-gray-500 font-bold">
             When should this pass start?
@@ -248,6 +259,7 @@ function CheckoutPageInner() {
             userId={session.id}
             startsAt={startsAt}
             referralCode={referralCode}
+            subscription={subscription}
             onSuccess={setPurchasedPass}
             onError={setSetupError}
           />
@@ -259,7 +271,7 @@ function CheckoutPageInner() {
   );
 }
 
-function CheckoutForm({ gym, pass, userId, startsAt, referralCode, onSuccess, onError }) {
+function CheckoutForm({ gym, pass, userId, startsAt, referralCode, subscription, onSuccess, onError }) {
   const stripe = useStripe();
   const elements = useElements();
   const [submitting, setSubmitting] = useState(false);
@@ -285,7 +297,11 @@ function CheckoutForm({ gym, pass, userId, startsAt, referralCode, onSuccess, on
 
     if (paymentIntent?.status === 'succeeded') {
       try {
-        const newPass = await finalizePassPurchase({ gym, pass, userId, stripePaymentId: paymentIntent.id, startsAt, referralCode });
+        const newPass = await finalizePassPurchase({
+          gym, pass, userId, stripePaymentId: paymentIntent.id, startsAt, referralCode,
+          stripeSubscriptionId: subscription?.subscriptionId,
+          stripeCustomerId: subscription?.customerId,
+        });
         onSuccess(newPass);
       } catch (err) {
         onError(err.message || 'Payment succeeded but saving the pass failed. Contact support.');

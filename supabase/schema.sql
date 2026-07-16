@@ -73,6 +73,8 @@ create table if not exists gyms (
   branding jsonb default '{}'::jsonb,
   "siteKeywords" jsonb default '[]'::jsonb,  -- auto-extracted from the gym's own website; see /api/sync-keywords
   "pageSettings" jsonb default '{}'::jsonb,  -- per-section show/hide toggles for the owner's public gym page
+  "classSchedule" jsonb default '[]'::jsonb, -- recurring weekly class template: [{id, className, dayOfWeek, startTime, durationMinutes, capacity, instructor}]
+  suspended boolean default false,           -- platform-admin moderation flag; hides the listing from search/browse
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -99,12 +101,16 @@ create table if not exists passes (
   "remainingPunches" int,
   "totalPunches" int,
   "stripePaymentId" text,
+  "stripeSubscriptionId" text,   -- set only for MEMBERSHIP passes billed as a Stripe Subscription
+  "stripeCustomerId" text,
+  status text default 'active', -- 'active' | 'past_due' | 'canceled' — driven by Stripe webhook for subscriptions
   created_at timestamptz default now()
 );
 
 create index if not exists idx_passes_userId on passes ("userId");
 create index if not exists idx_passes_gymId on passes ("gymId");
 create index if not exists idx_passes_expiresAt on passes ("expiresAt");
+create index if not exists idx_passes_stripeSubscriptionId on passes ("stripeSubscriptionId");
 
 -- ─── CHECK-INS ─────────────────────────────────────────────────────
 -- One row per successful pass scan (front desk or in-app). Powers the
@@ -118,6 +124,44 @@ create table if not exists checkins (
 
 create index if not exists idx_checkins_userId on checkins ("userId");
 create index if not exists idx_checkins_gymId on checkins ("gymId");
+
+-- ─── CLASS BOOKINGS ────────────────────────────────────────────────
+-- One row per member's reservation for a specific weekly occurrence of a
+-- class defined in gyms."classSchedule". "classDate" is the actual calendar
+-- date of that occurrence (the schedule entry itself is just a weekly
+-- day-of-week + time template), so the same recurring class produces a
+-- fresh row — and its own capacity count — every week.
+create table if not exists "classBookings" (
+  id text primary key,
+  "gymId" text references gyms(id) on delete cascade,
+  "classScheduleId" text not null,
+  "className" text,
+  "userId" text references users(id) on delete cascade,
+  username text,
+  "classDate" date not null,
+  status text default 'booked', -- 'booked' | 'waitlisted' | 'cancelled'
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_classBookings_gymId on "classBookings" ("gymId");
+create index if not exists idx_classBookings_userId on "classBookings" ("userId");
+create index if not exists idx_classBookings_occurrence on "classBookings" ("gymId", "classScheduleId", "classDate");
+
+-- ─── MESSAGES ──────────────────────────────────────────────────────
+-- A conversation is implicitly keyed by (gymId, userId) — one thread per
+-- member per gym, with senderRole distinguishing who wrote each line.
+create table if not exists messages (
+  id text primary key,
+  "gymId" text references gyms(id) on delete cascade,
+  "userId" text references users(id) on delete cascade,
+  username text,               -- the member's username, denormalized for the owner's inbox list
+  "senderRole" text not null,  -- 'member' | 'owner'
+  text text not null,
+  read boolean default false,
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_messages_conversation on messages ("gymId", "userId");
 
 -- ─── ATOMIC REVENUE RPC ────────────────────────────────────────────
 -- Increments the gym's revenue counters without read-modify-write races.
@@ -284,3 +328,37 @@ create policy "Public upload review photos" on storage.objects
 --
 -- Phase 10 additions (owner-controlled page section visibility):
 -- alter table gyms add column if not exists "pageSettings" jsonb default '{}'::jsonb;
+--
+-- Phase 11 additions (recurring membership billing, class booking, in-app
+-- messaging, platform-admin moderation):
+-- alter table passes add column if not exists "stripeSubscriptionId" text;
+-- alter table passes add column if not exists "stripeCustomerId" text;
+-- alter table passes add column if not exists status text default 'active';
+-- create index if not exists idx_passes_stripeSubscriptionId on passes ("stripeSubscriptionId");
+-- alter table gyms add column if not exists "classSchedule" jsonb default '[]'::jsonb;
+-- alter table gyms add column if not exists suspended boolean default false;
+-- create table if not exists "classBookings" (
+--   id text primary key,
+--   "gymId" text references gyms(id) on delete cascade,
+--   "classScheduleId" text not null,
+--   "className" text,
+--   "userId" text references users(id) on delete cascade,
+--   username text,
+--   "classDate" date not null,
+--   status text default 'booked',
+--   created_at timestamptz default now()
+-- );
+-- create index if not exists idx_classBookings_gymId on "classBookings" ("gymId");
+-- create index if not exists idx_classBookings_userId on "classBookings" ("userId");
+-- create index if not exists idx_classBookings_occurrence on "classBookings" ("gymId", "classScheduleId", "classDate");
+-- create table if not exists messages (
+--   id text primary key,
+--   "gymId" text references gyms(id) on delete cascade,
+--   "userId" text references users(id) on delete cascade,
+--   username text,
+--   "senderRole" text not null,
+--   text text not null,
+--   read boolean default false,
+--   created_at timestamptz default now()
+-- );
+-- create index if not exists idx_messages_conversation on messages ("gymId", "userId");

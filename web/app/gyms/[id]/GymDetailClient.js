@@ -1,11 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { Suspense, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getAvgRating, renderStars, isOpenNow, getActivePromotion, uniqueId, buildWorkoutICS, isSectionVisible } from '../../../../lib/helpers';
+import { getAvgRating, renderStars, isOpenNow, getActivePromotion, uniqueId, buildWorkoutICS, isSectionVisible, getUpcomingClassOccurrences, countBookedForOccurrence } from '../../../../lib/helpers';
 import { EQUIP_CATEGORIES, PLATFORM_FEE_RATE, MUSCLE_GROUPS, EXPERIENCE_LEVELS } from '../../../../lib/constants';
-import { upsertUser, addGymReview, uploadReviewPhoto, reportEquipmentIssue } from '../../../../lib/supabase';
+import { upsertUser, addGymReview, uploadReviewPhoto, reportEquipmentIssue, loadGymClassBookings, bookClass, sendMessage, loadConversation } from '../../../../lib/supabase';
 import { getSession, setSession } from '@/lib/auth';
 import { useT } from '@/lib/PreferencesContext';
 import GymCard from '@/components/GymCard';
@@ -37,9 +37,15 @@ function GymDetailClientInner({ gym: initialGym, similarGyms = [] }) {
   const [gym, setGym] = useState(initialGym);
   const [equipFilter, setEquipFilter] = useState('All');
   const [shared, setShared] = useState(false);
+  const [classBookings, setClassBookings] = useState([]);
   const searchParams = useSearchParams();
   const ref = searchParams.get('ref');
   const t = useT();
+
+  useEffect(() => {
+    if (!gym?.id || !(gym.classSchedule || []).length) return;
+    loadGymClassBookings(gym.id).then(setClassBookings);
+  }, [gym?.id, gym?.classSchedule]);
 
   if (!gym) {
     return (
@@ -216,6 +222,11 @@ function GymDetailClientInner({ gym: initialGym, similarGyms = [] }) {
         )}
       </div>
 
+      {/* Classes */}
+      {isSectionVisible(gym, 'showClasses') && (gym.classSchedule || []).length > 0 && (
+        <ClassesSection gym={gym} bookings={classBookings} onBooked={(b) => setClassBookings((prev) => [...prev, b])} />
+      )}
+
       {/* Equipment */}
       {isSectionVisible(gym, 'showEquipment') && (
         <Reveal as="section" className="mb-10">
@@ -265,6 +276,11 @@ function GymDetailClientInner({ gym: initialGym, similarGyms = [] }) {
           </div>
         </Reveal>
       )}
+
+      {/* Message the gym */}
+      <Reveal as="section" className="mb-10">
+        <MessageWidget gym={gym} />
+      </Reveal>
 
       {/* Reviews */}
       <Reveal as="section">
@@ -706,6 +722,141 @@ function downloadICS(workout) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// ─── Classes & booking ─────────────────────────────────────────────────────
+function ClassesSection({ gym, bookings, onBooked }) {
+  const occurrences = getUpcomingClassOccurrences(gym, 2);
+  const [bookingId, setBookingId] = useState(null);
+  const session = getSession();
+  const myBookedKeys = new Set(
+    bookings.filter((b) => b.userId === session?.id && b.status !== 'cancelled').map((b) => `${b.classScheduleId}|${b.classDate}`)
+  );
+
+  const book = async (occ) => {
+    if (!session) { window.location.href = `/login?next=/gyms/${gym.id}`; return; }
+    setBookingId(`${occ.id}|${occ.classDate}`);
+    try {
+      const booking = await bookClass({
+        gymId: gym.id, classScheduleId: occ.id, className: occ.className, classDate: occ.classDate,
+        capacity: occ.capacity, userId: session.id, username: session.username,
+      });
+      onBooked(booking);
+    } finally {
+      setBookingId(null);
+    }
+  };
+
+  if (occurrences.length === 0) return null;
+
+  return (
+    <Reveal as="section" className="mb-10">
+      <h2 className="text-2xl font-bold mb-4">🧘 Classes</h2>
+      <ul className="grid sm:grid-cols-2 gap-3">
+        {occurrences.map((occ) => {
+          const key = `${occ.id}|${occ.classDate}`;
+          const booked = countBookedForOccurrence(bookings, occ.id, occ.classDate);
+          const full = occ.capacity > 0 && booked >= occ.capacity;
+          const alreadyBooked = myBookedKeys.has(key);
+          return (
+            <li key={key} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
+              <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{occ.className}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                {new Date(occ.classDate).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} · {occ.startTime}
+                {occ.instructor && ` · ${occ.instructor}`}
+              </div>
+              <div className="flex justify-between items-center mt-3">
+                <span className={'text-xs font-bold ' + (full ? 'text-danger' : 'text-gray-500 dark:text-gray-400')}>
+                  {occ.capacity > 0 ? `${booked}/${occ.capacity} booked` : `${booked} booked`}
+                </span>
+                {alreadyBooked ? (
+                  <span className="text-xs font-bold text-success">✓ Booked</span>
+                ) : (
+                  <button
+                    onClick={() => book(occ)}
+                    disabled={bookingId === key}
+                    className="bg-brand hover:bg-brand-dark text-white text-xs font-semibold px-3 py-1.5 rounded-lg transition disabled:opacity-60"
+                  >
+                    {bookingId === key ? '...' : full ? 'Join waitlist' : 'Book'}
+                  </button>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </Reveal>
+  );
+}
+
+// ─── Message the gym ────────────────────────────────────────────────────────
+function MessageWidget({ gym }) {
+  const session = getSession();
+  const [open, setOpen] = useState(false);
+  const [thread, setThread] = useState([]);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const loadThread = async () => {
+    setOpen(true);
+    if (session) setThread(await loadConversation(gym.id, session.id));
+  };
+
+  const send = async (e) => {
+    e.preventDefault();
+    if (!text.trim() || !session) return;
+    setSending(true);
+    try {
+      const msg = await sendMessage(gym.id, session.id, session.username, 'member', text.trim());
+      setThread((prev) => [...prev, msg]);
+      setText('');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (!session) {
+    return (
+      <p className="text-sm text-gray-500 dark:text-gray-400">
+        <Link href={`/login?next=/gyms/${gym.id}`} className="text-brand-text dark:text-blue-400 hover:underline font-semibold">Log in</Link> to message {gym.gymName}.
+      </p>
+    );
+  }
+
+  return (
+    <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
+      {!open ? (
+        <button onClick={loadThread} className="text-sm font-bold text-gray-900 dark:text-gray-100">
+          💬 Message {gym.gymName}
+        </button>
+      ) : (
+        <>
+          <h2 className="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3">💬 Message {gym.gymName}</h2>
+          {thread.length > 0 && (
+            <ul className="space-y-2 mb-3 max-h-64 overflow-y-auto">
+              {thread.map((m) => (
+                <li key={m.id} className={'text-sm px-3 py-2 rounded-lg max-w-[85%] ' + (m.senderRole === 'member' ? 'bg-brand/10 text-gray-900 dark:text-gray-100 ml-auto' : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100')}>
+                  {m.text}
+                </li>
+              ))}
+            </ul>
+          )}
+          <form onSubmit={send} className="flex gap-2">
+            <input
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="Ask a question..."
+              className="flex-1 px-3.5 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg text-sm focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
+              autoFocus
+            />
+            <button type="submit" disabled={sending || !text.trim()} className="bg-brand hover:bg-brand-dark text-white text-sm font-semibold px-4 rounded-lg transition disabled:opacity-60">
+              Send
+            </button>
+          </form>
+        </>
+      )}
+    </div>
+  );
 }
 
 // ─── Referral share button ────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 import { loadGyms, incrementMatchImpressions, upsertUser } from '../../../lib/supabase';
-import { getDistanceMiles, getAvgRating, isOpenNow, runLocalMatch } from '../../../lib/helpers';
+import { getDistanceMiles, getAvgRating, isOpenNow, runLocalMatch, getActivePromotion } from '../../../lib/helpers';
 import { CLASS_TYPES, EQUIP_CATEGORIES, AMENITIES, DEFAULT_LOCATION } from '../../../lib/constants';
 import { getSession, setSession } from '@/lib/auth';
 import { useT } from '@/lib/PreferencesContext';
@@ -26,6 +26,8 @@ export default function GymsListPage() {
   const [minPrice, setMinPrice] = useState('');
   const [maxPrice, setMaxPrice] = useState('');
   const [openNowOnly, setOpenNowOnly] = useState(false);
+  const [minRating, setMinRating] = useState(0);
+  const [activePromosOnly, setActivePromosOnly] = useState(false);
   const [sortBy, setSortBy] = useState('DISTANCE');
   const [selectedAmenities, setSelectedAmenities] = useState([]);
   const [viewMode, setViewMode] = useState('LIST');
@@ -71,6 +73,7 @@ export default function GymsListPage() {
     const q = query.trim().toLowerCase();
     let list = gyms.filter((g) => {
       if (!g.lat || !g.lon) return false;
+      if (g.suspended) return false;
       if (q) {
         const text = `${g.gymName} ${g.location} ${g.description || ''}`.toLowerCase();
         if (!text.includes(q)) return false;
@@ -79,6 +82,8 @@ export default function GymsListPage() {
       if (minPrice && g.monthlyPrice < Number(minPrice)) return false;
       if (maxPrice && g.monthlyPrice > Number(maxPrice)) return false;
       if (openNowOnly && isOpenNow(g) === false) return false;
+      if (minRating > 0 && getAvgRating(g.gymReviews) < minRating) return false;
+      if (activePromosOnly && !getActivePromotion(g)) return false;
       if (selectedAmenities.length > 0 && !selectedAmenities.every((a) => (g.amenities || []).includes(a))) return false;
       if (equipCategory !== 'All' || targetMuscle) {
         const hasMatch = (g.equipment || []).some((eq) => {
@@ -109,7 +114,7 @@ export default function GymsListPage() {
     });
 
     return list;
-  }, [gyms, query, classFilter, equipCategory, targetMuscle, minPrice, maxPrice, openNowOnly, selectedAmenities, sortBy, userLoc, aiMatches]);
+  }, [gyms, query, classFilter, equipCategory, targetMuscle, minPrice, maxPrice, openNowOnly, minRating, activePromosOnly, selectedAmenities, sortBy, userLoc, aiMatches]);
 
   const toggleAmenity = (a) => {
     setSelectedAmenities((prev) => prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]);
@@ -338,15 +343,38 @@ export default function GymsListPage() {
           />
         </div>
 
-        <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={openNowOnly}
-            onChange={(e) => setOpenNowOnly(e.target.checked)}
-            className="w-4 h-4 accent-brand"
-          />
-          {t('openNowOnly')}
-        </label>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={openNowOnly}
+              onChange={(e) => setOpenNowOnly(e.target.checked)}
+              className="w-4 h-4 accent-brand"
+            />
+            {t('openNowOnly')}
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={activePromosOnly}
+              onChange={(e) => setActivePromosOnly(e.target.checked)}
+              className="w-4 h-4 accent-brand"
+            />
+            🔥 Active promotions only
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            Min rating
+            <select
+              value={minRating}
+              onChange={(e) => setMinRating(Number(e.target.value))}
+              aria-label="Minimum rating"
+              className="px-2 py-1.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg bg-white text-sm"
+            >
+              <option value={0}>Any</option>
+              {[3, 3.5, 4, 4.5].map((r) => <option key={r} value={r}>★ {r}+</option>)}
+            </select>
+          </label>
+        </div>
       </div>
 
       {/* ── Results ───────────────────────────────────────────────────── */}
