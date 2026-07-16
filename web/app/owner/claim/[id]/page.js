@@ -67,7 +67,7 @@ export default function ClaimGymPage() {
     return (
       <div className="max-w-md mx-auto px-6 py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Gym not found</h1>
-        <Link href="/gyms" className="text-brand hover:underline">← Back to all gyms</Link>
+        <Link href="/gyms" className="text-brand-text hover:underline">← Back to all gyms</Link>
       </div>
     );
   }
@@ -77,14 +77,14 @@ export default function ClaimGymPage() {
       <div className="max-w-md mx-auto px-6 py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Already claimed</h1>
         <p className="text-gray-600 dark:text-gray-400 mb-4">{gym.gymName} already has a registered owner account.</p>
-        <Link href="/owner/login" className="text-brand hover:underline">Go to owner sign-in →</Link>
+        <Link href="/owner/login" className="text-brand-text hover:underline">Go to owner sign-in →</Link>
       </div>
     );
   }
 
   return (
     <div className="max-w-md mx-auto px-6 py-16">
-      <Link href={`/gyms/${gymId}`} className="text-sm font-semibold text-gray-500 dark:text-gray-500 hover:text-brand transition">← Back to {gym.gymName}</Link>
+      <Link href={`/gyms/${gymId}`} className="text-sm font-semibold text-gray-500 dark:text-gray-500 hover:text-brand-text transition">← Back to {gym.gymName}</Link>
       <h1 className="text-4xl font-black mb-2 mt-4">Claim This Listing</h1>
       <p className="text-gray-600 dark:text-gray-400 mb-8">
         Set up management credentials for <span className="font-semibold text-gray-900 dark:text-gray-100">{gym.gymName}</span> to unlock the owner portal — inventory, passes, analytics, and more.

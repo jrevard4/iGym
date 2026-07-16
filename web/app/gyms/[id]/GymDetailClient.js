@@ -94,7 +94,7 @@ function GymDetailClientInner({ gym }) {
             </span>
           )}
           {claimed && (
-            <span className="bg-blue-50 dark:bg-blue-950 text-brand text-xs font-extrabold px-2 py-1 rounded">
+            <span className="bg-blue-50 dark:bg-blue-950 text-brand-text text-xs font-extrabold px-2 py-1 rounded">
               ✓ {t('verified')}
             </span>
           )}
@@ -103,21 +103,21 @@ function GymDetailClientInner({ gym }) {
             onClick={shareMatch}
             aria-label={t('shareMatch')}
             title={t('shareMatch')}
-            className="text-gray-400 dark:text-gray-500 hover:text-brand transition text-lg"
+            className="text-gray-400 dark:text-gray-500 hover:text-brand-text transition text-lg"
           >
             {shared ? '✓' : '🔗'}
           </button>
         </div>
         <p className="text-gray-600 dark:text-gray-400">{gym.location}</p>
         {!claimed && (
-          <Link href={`/owner/claim/${gym.id}`} className="inline-block mt-2 text-xs font-semibold text-gray-500 dark:text-gray-500 hover:text-brand transition">
+          <Link href={`/owner/claim/${gym.id}`} className="inline-block mt-2 text-xs font-semibold text-gray-500 dark:text-gray-500 hover:text-brand-text transition">
             {t('claimListing')}
           </Link>
         )}
       </div>
 
       {promo && (
-        <div className="bg-brand/10 text-brand font-bold text-sm px-4 py-3 rounded-xl mb-6">
+        <div className="bg-brand/10 text-brand-text font-bold text-sm px-4 py-3 rounded-xl mb-6">
           🔥 {promo.title}
           {promo.detail && <span className="font-normal"> — {promo.detail}</span>}
         </div>
@@ -243,7 +243,7 @@ function GymDetailClientInner({ gym }) {
               <li key={eq.id} className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-xl p-4">
                 <div className="flex justify-between items-start gap-2 mb-1">
                   <div className="font-bold text-sm text-gray-900 dark:text-gray-100">{eq.name}</div>
-                  <span className="bg-brand/10 text-brand text-xs font-bold px-2 py-0.5 rounded shrink-0">
+                  <span className="bg-brand/10 text-brand-text text-xs font-bold px-2 py-0.5 rounded shrink-0">
                     {eq.category}
                   </span>
                 </div>
@@ -458,7 +458,7 @@ function WorkoutGeneratorSection({ gym }) {
                 type="button"
                 onClick={() => toggleMuscle(m)}
                 aria-pressed={active}
-                className={'px-3 py-1.5 rounded-full text-xs font-semibold transition ' + (active ? 'bg-white text-brand' : 'bg-white/15 text-white hover:bg-white/25')}
+                className={'px-3 py-1.5 rounded-full text-xs font-semibold transition ' + (active ? 'bg-white text-brand-text' : 'bg-white/15 text-white hover:bg-white/25')}
               >
                 {m}
               </button>
@@ -488,7 +488,7 @@ function WorkoutGeneratorSection({ gym }) {
         <button
           onClick={generate}
           disabled={loading}
-          className="bg-white text-brand font-bold px-6 py-3 rounded-lg hover:bg-white/90 transition disabled:opacity-60"
+          className="bg-white text-brand-text font-bold px-6 py-3 rounded-lg hover:bg-white/90 transition disabled:opacity-60"
         >
           {loading ? 'Building your workout...' : 'Generate Workout'}
         </button>
@@ -500,7 +500,7 @@ function WorkoutGeneratorSection({ gym }) {
           <div className="flex justify-between items-start gap-3 mb-2">
             <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">{plan.title}</h3>
             {plan.estimatedDuration && (
-              <span className="bg-brand/10 text-brand text-xs font-bold px-2.5 py-1 rounded shrink-0">
+              <span className="bg-brand/10 text-brand-text text-xs font-bold px-2.5 py-1 rounded shrink-0">
                 ⏱ {plan.estimatedDuration}
               </span>
             )}
