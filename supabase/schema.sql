@@ -72,6 +72,7 @@ create table if not exists gyms (
   amenities jsonb default '[]'::jsonb,
   branding jsonb default '{}'::jsonb,
   "siteKeywords" jsonb default '[]'::jsonb,  -- auto-extracted from the gym's own website; see /api/sync-keywords
+  "pageSettings" jsonb default '{}'::jsonb,  -- per-section show/hide toggles for the owner's public gym page
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -280,3 +281,6 @@ create policy "Public upload review photos" on storage.objects
 --   for select using (bucket_id = 'review-photos');
 -- create policy "Public upload review photos" on storage.objects
 --   for insert with check (bucket_id = 'review-photos');
+--
+-- Phase 10 additions (owner-controlled page section visibility):
+-- alter table gyms add column if not exists "pageSettings" jsonb default '{}'::jsonb;

@@ -25,12 +25,14 @@ import env from './lib/env';
 import {
   CLASS_TYPES, EQUIP_CATEGORIES, PLAN_TIERS, US_STATES, PRESET_PASSES,
   DEFAULT_LOCATION, PLATFORM_FEE_RATE, MEMBER_PREMIUM_PRICE, BRAND_WEBSITES,
-  MUSCLE_GROUPS, EXPERIENCE_LEVELS, AMENITIES,
+  MUSCLE_GROUPS, EXPERIENCE_LEVELS, AMENITIES, PAGE_SECTIONS,
 } from './lib/constants';
 import {
   getDistanceMiles, getAvgRating, renderStars, isOpenNow, getAIMatchScore,
   runLocalMatch, uniqueId, getActivePromotion, computeCheckinStats, findSimilarGyms,
+  stripHtmlToText, extractKeywords, isSectionVisible,
 } from './lib/helpers';
+import { parseProductFromHtml } from './lib/productImport';
 import {
   loadUsers, upsertUser, loginUser as dbLoginUser, registerUser as dbRegisterUser,
   loadGyms, upsertGym, loginOwner as dbLoginOwner,
@@ -221,6 +223,7 @@ function IGymApp() {
   const [searchFilters, setSearchFilters] = useState({
     radius:'15', maxPrice:'', reqEquipCategory:'All',
     reqMinWeight:'', reqMaxWeight:'', reqClass:'All', targetMuscle:'', openNow: false,
+    amenities: [],
   });
   const [gymSortBy, setGymSortBy] = useState('DISTANCE');
 
@@ -257,6 +260,10 @@ function IGymApp() {
   const [reviewInput, setReviewInput] = useState('');
   const [equipReportNote, setEquipReportNote] = useState('');
   const [equipReportSent, setEquipReportSent] = useState(false);
+  const [uploadingEquipPhoto, setUploadingEquipPhoto] = useState(null);
+  const [equipLinkUrl, setEquipLinkUrl] = useState('');
+  const [importingEquipLink, setImportingEquipLink] = useState(false);
+  const [equipLinkError, setEquipLinkError] = useState('');
   const [replyingReviewId, setReplyingReviewId] = useState(null);
   const [reviewReplyText, setReviewReplyText] = useState('');
   const [regData, setRegData] = useState({ firstName:'', lastName:'', username:'', password:'', email:'', address:'', city:'', state:'Select State', zip:'', referredBy:'' });
@@ -913,6 +920,26 @@ function IGymApp() {
     await persistOwner(updated);
     setIsSavingGeo(false);
     Alert.alert('Saved', 'Gym profile updated!');
+    syncSiteKeywordsInBackground(updated);
+  };
+
+  // Automated site indexing — mirrors web's Profile-page auto-sync (see
+  // web/app/owner/profile/page.js) so a gym managed only from the app still
+  // gets scanned for searchable keywords, not just gyms managed from web.
+  // RN's fetch has no CORS restriction, so this hits the site directly with
+  // no server proxy needed. Best-effort — never surfaces an error to the owner.
+  const syncSiteKeywordsInBackground = async (base) => {
+    if (!base.website?.trim()) return;
+    try {
+      const res = await fetch(base.website.trim());
+      if (!res.ok) return;
+      const html = await res.text();
+      const keywords = extractKeywords(stripHtmlToText(html));
+      if (keywords.length === 0) return;
+      await persistOwner({ ...base, siteKeywords: keywords });
+    } catch (e) {
+      console.warn('[syncSiteKeywordsInBackground]', e.message || e);
+    }
   };
 
   const saveNewEquipment = async () => {
@@ -944,12 +971,54 @@ function IGymApp() {
     ]);
   };
 
+  // Uploads to the shared 'equipment-photos' Storage bucket so the photo is
+  // actually visible to anyone viewing the gym — not just a local file://
+  // URI that only ever resolved on this device (the bug this replaces).
   const pickEditMedia = async (field, isVideo = false) => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: isVideo ? ImagePicker.MediaTypeOptions.Videos : ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true, quality: 1,
     });
-    if (!result.canceled) setEditEquipData(prev => ({ ...prev, [field]: result.assets[0].uri }));
+    if (result.canceled) return;
+    const localUri = result.assets[0].uri;
+    setEditEquipData(prev => ({ ...prev, [field]: localUri })); // instant local preview
+    if (isVideo) return; // video URLs aren't uploaded here — only real photo fields
+    setUploadingEquipPhoto(field);
+    const publicUrl = await uploadPhotoFromUri('equipment-photos', localUri);
+    setUploadingEquipPhoto(null);
+    if (publicUrl) {
+      setEditEquipData(prev => ({ ...prev, [field]: publicUrl }));
+    } else {
+      Alert.alert('Upload issue', "This photo saved to your device but couldn't upload — it may not show for other members until you try again.");
+    }
+  };
+
+  // Paste-a-link import — mobile's equivalent of web's drag-and-drop product
+  // import. RN's fetch has no browser CORS restriction, so this can hit an
+  // arbitrary supplier URL directly from the client with no server proxy.
+  const importEquipmentFromLink = async () => {
+    const url = equipLinkUrl.trim();
+    if (!url) return;
+    setImportingEquipLink(true);
+    setEquipLinkError('');
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`That page returned ${res.status}.`);
+      const html = await res.text();
+      const product = parseProductFromHtml(html, url);
+      if (!product.name && !product.imageUrl) throw new Error("Couldn't find product info on that page.");
+      setEditEquipData(prev => ({
+        ...prev,
+        name: product.name || prev.name,
+        image: product.imageUrl || prev.image,
+        description: product.description || prev.description,
+      }));
+      setEquipLinkUrl('');
+    } catch (err) {
+      setEquipLinkError(err.message || 'Could not import that link.');
+    } finally {
+      setImportingEquipLink(false);
+    }
   };
 
   // ─── AI equipment identifier ─────────────────────────────────
@@ -1006,6 +1075,10 @@ function IGymApp() {
         setEditEquipData(prev => ({ ...prev, image: uri }));
         setEquipIdentifyResults(null); setEquipIdentifyError('');
         await identifyEquipmentWithAI(uri);
+        setUploadingEquipPhoto('image');
+        const publicUrl = await uploadPhotoFromUri('equipment-photos', uri);
+        setUploadingEquipPhoto(null);
+        if (publicUrl) setEditEquipData(prev => ({ ...prev, image: publicUrl }));
       }
     } catch {
       Alert.alert('Error', 'Could not open camera or photo library.');
@@ -1870,7 +1943,41 @@ function IGymApp() {
                     <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#5856D6',paddingHorizontal:20}]} onPress={handleAddCustomClass}><Text style={styles.btnText}>Add</Text></TouchableOpacity>
                   </View>
 
+                  <Text style={[styles.sectionLabel,{marginTop:15}]}>Amenities</Text>
+                  <View style={{flexDirection:'row',flexWrap:'wrap',marginBottom:15}}>
+                    {AMENITIES.map(a => {
+                      const active = infoForm.amenities?.includes(a);
+                      return (
+                        <TouchableOpacity
+                          key={a}
+                          onPress={() => { const c=infoForm.amenities||[]; setInfoForm(p=>({...p,amenities:active?c.filter(x=>x!==a):[...c,a]})); }}
+                          style={[styles.filterChip,{marginBottom:10},active&&styles.filterChipActive]}
+                        >
+                          <Text style={[styles.filterChipText,active&&styles.filterChipTextActive]}>{a}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
                   <TextInput style={[styles.input,{height:100,textAlignVertical:'top',marginTop:15}]} value={infoForm.description} onChangeText={t => setInfoForm(p=>({...p,description:t}))} placeholder="Tell customers about your facility..." multiline/>
+
+                  <Text style={[styles.sectionLabel,{marginTop:15}]}>👁️ Page Visibility</Text>
+                  <Text style={{color:'#888',fontSize:12,marginBottom:10,marginTop:-6}}>Choose what shows on your public gym page. Hiding a section doesn't delete anything.</Text>
+                  <View style={styles.infoBox}>
+                    {PAGE_SECTIONS.map(s => {
+                      const visible = isSectionVisible(infoForm, s.key);
+                      return (
+                        <View key={s.key} style={[styles.rowJustify,{paddingVertical:8}]}>
+                          <Text style={{fontSize:14,color:theme.text,flex:1,marginRight:10}}>{s.label}</Text>
+                          <Switch
+                            value={visible}
+                            onValueChange={() => setInfoForm(p => ({...p, pageSettings: {...(p.pageSettings||{}), [s.key]: !visible}}))}
+                          />
+                        </View>
+                      );
+                    })}
+                  </View>
+
                   <TouchableOpacity style={[styles.primaryBtn,{marginTop:10}]} onPress={saveGymProfile} disabled={isSavingGeo}>
                     {isSavingGeo ? <ActivityIndicator color="#FFF"/> : <Text style={styles.btnText}>Save to Database</Text>}
                   </TouchableOpacity>
@@ -2194,6 +2301,22 @@ function IGymApp() {
                   ) : null}
                 </View>
 
+                <Text style={[styles.sectionLabel, {marginTop:16}]}>🔗 Import from a supplier link</Text>
+                <View style={[styles.row, {gap:8}]}>
+                  <TextInput
+                    style={[styles.input, {flex:1}]}
+                    value={equipLinkUrl}
+                    onChangeText={setEquipLinkUrl}
+                    placeholder="Paste a product page link"
+                    autoCapitalize="none"
+                    keyboardType="url"
+                  />
+                  <TouchableOpacity style={[styles.primaryBtn, {paddingHorizontal:18}, (!equipLinkUrl.trim()||importingEquipLink)&&styles.equipAiBtnDisabled]} onPress={importEquipmentFromLink} disabled={!equipLinkUrl.trim()||importingEquipLink}>
+                    {importingEquipLink ? <ActivityIndicator color="#FFF"/> : <Text style={styles.btnText}>Import</Text>}
+                  </TouchableOpacity>
+                </View>
+                {!!equipLinkError && <Text style={{color:'#C62828', fontSize:12, marginBottom:10}}>{equipLinkError}</Text>}
+
                 <Text style={[styles.sectionLabel, {marginTop:20}]}>
                   {equipIdentifyResults ? '📝 Review & Edit Details' : 'Equipment Details'}
                 </Text>
@@ -2209,6 +2332,12 @@ function IGymApp() {
                   <TouchableOpacity style={styles.uploadBtn} onPress={() => pickEditMedia('image', false)}>
                     <Text style={{color:'#999', fontWeight:'bold'}}>📷 Upload Equipment Photo</Text>
                   </TouchableOpacity>
+                )}
+                {uploadingEquipPhoto === 'image' && (
+                  <View style={{flexDirection:'row', alignItems:'center', gap:6, marginTop:-10, marginBottom:15}}>
+                    <ActivityIndicator size="small" color="#5856D6"/>
+                    <Text style={{color:'#5856D6', fontSize:12}}>Uploading photo...</Text>
+                  </View>
                 )}
 
                 <TextInput style={styles.input} value={editEquipData.name} onChangeText={t => setEditEquipData(p=>({...p, name:t}))} placeholder="Equipment Name"/>
@@ -2261,6 +2390,7 @@ function IGymApp() {
           if (searchFilters.maxPrice && gym.monthlyPrice > parseFloat(searchFilters.maxPrice)) return false;
           if (searchFilters.reqClass!=='All' && !(gym.classes||[]).includes(searchFilters.reqClass)) return false;
           if (searchFilters.openNow) { const open = isOpenNow(gym); if (open === false) return false; }
+          if ((searchFilters.amenities||[]).length > 0 && !searchFilters.amenities.every(a => (gym.amenities||[]).includes(a))) return false;
           if (searchFilters.reqEquipCategory!=='All'||searchFilters.reqMinWeight||searchFilters.reqMaxWeight||searchFilters.targetMuscle) {
             const hasEquip = (gym.equipment||[]).some(eq => {
               if (searchFilters.reqEquipCategory!=='All' && eq.category!==searchFilters.reqEquipCategory) return false;
@@ -2457,6 +2587,7 @@ function IGymApp() {
                         const matchData = isAiFiltering ? aiMatchResults[item.id] : null;
                         const matchScore = matchData?.score ?? (isAiFiltering ? getAIMatchScore(item, aiPrompt) : null);
                         const isExpanded = expandedMatchId === item.id;
+                        const topReview = (item.gymReviews||[]).filter(r => r.rating>=4 && r.text).sort((a,b)=>b.rating-a.rating)[0];
                         return (
                           <View>
                             {matchData && (
@@ -2468,6 +2599,11 @@ function IGymApp() {
                               <View style={styles.rowJustify}>
                                 <View style={{flex:1,flexDirection:'row',alignItems:'center',gap:6,marginRight:8}}>
                                   {item.featured && <View style={styles.featuredBadge}><Text style={styles.featuredBadgeText}>⭐ Featured</Text></View>}
+                                  {!!item.ownerID && (
+                                    <View style={{backgroundColor:'#E5F1FF',paddingHorizontal:6,paddingVertical:2,borderRadius:5}}>
+                                      <Text style={{color:'#007AFF',fontWeight:'800',fontSize:9}}>✓ VERIFIED</Text>
+                                    </View>
+                                  )}
                                   <Text style={[styles.itemTitle,{flex:1}]}>{item.gymName}</Text>
                                 </View>
                                 <View style={{flexDirection:'row',alignItems:'center',gap:8}}>
@@ -2510,6 +2646,11 @@ function IGymApp() {
                                     </View>
                                   ))}
                                 </ScrollView>
+                              )}
+                              {!!topReview && !matchData && (
+                                <Text style={{fontSize:11,color:'#888',fontStyle:'italic',marginTop:8}} numberOfLines={2}>
+                                  "{topReview.text}" <Text style={{fontWeight:'700',fontStyle:'normal'}}>— @{topReview.username}</Text>
+                                </Text>
                               )}
                             </TouchableOpacity>
                             {matchData && (
@@ -2861,6 +3002,26 @@ function IGymApp() {
                       </TouchableOpacity>
                     ))}
                   </ScrollView>
+
+                  <Text style={styles.sectionLabel}>Amenities</Text>
+                  <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginBottom:20}}>
+                    {AMENITIES.map(a => {
+                      const active = (searchFilters.amenities||[]).includes(a);
+                      return (
+                        <TouchableOpacity
+                          key={a}
+                          style={[styles.filterChip,active&&styles.filterChipActive]}
+                          onPress={() => setSearchFilters(p => ({
+                            ...p,
+                            amenities: active ? p.amenities.filter(x=>x!==a) : [...(p.amenities||[]),a],
+                          }))}
+                        >
+                          <Text style={[styles.filterChipText,active&&styles.filterChipTextActive]}>{a}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
                   <TouchableOpacity style={[styles.primaryBtn,{marginTop:10}]} onPress={() => setShowSearchModal(false)}>
                     <Text style={styles.btnText}>Apply Filters</Text>
                   </TouchableOpacity>
@@ -2893,7 +3054,21 @@ function IGymApp() {
                 </View>
               </View>
 
-              <Text style={styles.header}>{selectedGym?.gymName}</Text>
+              {!!selectedGym?.branding?.heroImageUrl && (
+                <Image source={{uri:selectedGym.branding.heroImageUrl}} style={{width:'100%', height:150, borderRadius:16, marginTop:10}} resizeMode="cover"/>
+              )}
+
+              <View style={[styles.row,{alignItems:'center',gap:8,marginTop:10}]}>
+                {!!selectedGym?.branding?.logoUrl && (
+                  <Image source={{uri:selectedGym.branding.logoUrl}} style={{width:28,height:28,borderRadius:6,backgroundColor:'#FFF'}} resizeMode="contain"/>
+                )}
+                <Text style={[styles.header,{marginBottom:0,flexShrink:1}]}>{selectedGym?.gymName}</Text>
+                {!!selectedGym?.ownerID && (
+                  <View style={{backgroundColor:'#E5F1FF',paddingHorizontal:8,paddingVertical:3,borderRadius:6}}>
+                    <Text style={{color:'#007AFF',fontWeight:'800',fontSize:10}}>✓ VERIFIED</Text>
+                  </View>
+                )}
+              </View>
               <Text style={styles.subHeader}>{selectedGym?.location}</Text>
 
               {getActivePromotion(selectedGym) && (
@@ -2921,6 +3096,16 @@ function IGymApp() {
                 <Text style={styles.infoText}>💳 {selectedGym?.pricing||'Pricing unavailable'}</Text>
                 {selectedGym?.hoursDisplay && <Text style={styles.infoText}>⏰ {selectedGym.hoursDisplay}</Text>}
               </View>
+
+              {isSectionVisible(selectedGym, 'showAmenities') && (selectedGym?.amenities||[]).length > 0 && (
+                <View style={{flexDirection:'row',flexWrap:'wrap',gap:6,marginBottom:15}}>
+                  {selectedGym.amenities.map(a => (
+                    <View key={a} style={{backgroundColor:'#F0F0F0',paddingHorizontal:10,paddingVertical:4,borderRadius:12}}>
+                      <Text style={{fontSize:11,color:'#555',fontWeight:'600'}}>{a}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
 
               {selectedGym?.referralFeeRate > 0 && currentUser?.referralCode && (
                 <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#111',marginTop:12}]} onPress={shareGymReferralLink}>
@@ -2963,92 +3148,100 @@ function IGymApp() {
 
               <Text style={{marginVertical:15,color:'#444',lineHeight:22}}>{selectedGym?.description}</Text>
 
-              <Text style={styles.sectionLabel}>Equipment ({displayEquipment.length})</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom:15}}>
-                {['All',...EQUIP_CATEGORIES].map(cat => (
-                  <TouchableOpacity key={cat} style={[styles.filterChip,equipFilter===cat&&styles.filterChipActive]} onPress={() => setEquipFilter(cat)}>
-                    <Text style={[styles.filterChipText,equipFilter===cat&&styles.filterChipTextActive]}>{cat}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-              <FlatList data={displayEquipment} keyExtractor={i=>i.id} showsVerticalScrollIndicator={false} renderItem={({item}) => (
-                <TouchableOpacity style={styles.itemCard} onPress={() => { setSelectedEquipment(item); navigateTo('EQUIP_DETAIL'); }}>
-                  <View style={styles.rowJustify}><Text style={styles.itemTitle}>{item.name}</Text><Text style={styles.categoryBadge}>{item.category}</Text></View>
-                  <Text style={{marginTop:6,color:'#555',fontSize:13}}>Target: {item.targetArea}</Text>
-                </TouchableOpacity>
-              )}/>
-
-              <Text style={[styles.sectionLabel,{marginTop:20}]}>✨ AI Workout Generator</Text>
-              <View style={styles.aiContainer}>
-                <Text style={{fontSize:13,color:theme.textMuted,marginBottom:10}}>
-                  Builds a workout using only the equipment {selectedGym?.gymName} actually has.
-                </Text>
-                <Text style={{fontSize:12,fontWeight:'700',color:theme.textMuted,marginBottom:8,textTransform:'uppercase'}}>Target muscle group(s)</Text>
-                <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginBottom:12}}>
-                  {MUSCLE_GROUPS.map(m => {
-                    const active = workoutMuscles.includes(m);
-                    return (
-                      <TouchableOpacity key={m} onPress={() => toggleWorkoutMuscle(m)}
-                        style={{paddingHorizontal:12,paddingVertical:6,borderRadius:16,backgroundColor: active ? theme.accent : theme.inputBg}}>
-                        <Text style={{fontSize:12,fontWeight:'700',color: active ? '#FFF' : theme.textMuted}}>{m}</Text>
+              {isSectionVisible(selectedGym, 'showEquipment') && (
+                <>
+                  <Text style={styles.sectionLabel}>Equipment ({displayEquipment.length})</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom:15}}>
+                    {['All',...EQUIP_CATEGORIES].map(cat => (
+                      <TouchableOpacity key={cat} style={[styles.filterChip,equipFilter===cat&&styles.filterChipActive]} onPress={() => setEquipFilter(cat)}>
+                        <Text style={[styles.filterChipText,equipFilter===cat&&styles.filterChipTextActive]}>{cat}</Text>
                       </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                <View style={{flexDirection:'row',gap:8,marginBottom:12}}>
-                  {EXPERIENCE_LEVELS.map(lvl => (
-                    <TouchableOpacity key={lvl} onPress={() => setWorkoutExperience(lvl)}
-                      style={{flex:1,paddingVertical:9,borderRadius:10,alignItems:'center',backgroundColor: workoutExperience===lvl ? theme.accent : theme.inputBg}}>
-                      <Text style={{fontSize:12,fontWeight:'700',color: workoutExperience===lvl ? '#FFF' : theme.textMuted}}>{lvl}</Text>
+                    ))}
+                  </ScrollView>
+                  <FlatList data={displayEquipment} keyExtractor={i=>i.id} showsVerticalScrollIndicator={false} renderItem={({item}) => (
+                    <TouchableOpacity style={styles.itemCard} onPress={() => { setSelectedEquipment(item); navigateTo('EQUIP_DETAIL'); }}>
+                      <View style={styles.rowJustify}><Text style={styles.itemTitle}>{item.name}</Text><Text style={styles.categoryBadge}>{item.category}</Text></View>
+                      <Text style={{marginTop:6,color:'#555',fontSize:13}}>Target: {item.targetArea}</Text>
                     </TouchableOpacity>
-                  ))}
-                </View>
-                <TextInput
-                  style={[styles.input,{marginBottom:12}]}
-                  placeholder="Optional goal, e.g. 'training for a 5K'"
-                  placeholderTextColor={theme.placeholder}
-                  value={workoutGoal}
-                  onChangeText={setWorkoutGoal}
-                />
-                {!apiKey && (
-                  <TouchableOpacity onPress={() => setShowApiKeyModal(true)} style={styles.aiKeyNudge}>
-                    <Text style={styles.aiKeyNudgeText}>⚡ Add your Anthropic API key to generate a workout →</Text>
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity style={[styles.equipAiBtn, !apiKey && styles.equipAiBtnDisabled, {marginTop:12}]} onPress={generateWorkout} disabled={!apiKey || isGeneratingWorkout}>
-                  {isGeneratingWorkout ? <ActivityIndicator color="#FFF"/> : <Text style={styles.equipAiBtnText}>Generate Workout</Text>}
-                </TouchableOpacity>
-                {!!workoutError && (
-                  <View style={[styles.equipAiError,{marginTop:12}]}><Text style={{color:'#C62828',fontSize:13}}>{workoutError}</Text></View>
-                )}
-              </View>
-
-              {workoutPlan && (
-                <View style={[styles.equipAiResults,{marginTop:12}]}>
-                  <View style={styles.rowJustify}>
-                    <Text style={{fontSize:18,fontWeight:'800',color:theme.text,flex:1}}>{workoutPlan.title}</Text>
-                    {!!workoutPlan.estimatedDuration && (
-                      <View style={styles.aiBadge}><Text style={styles.aiBadgeText}>⏱ {workoutPlan.estimatedDuration}</Text></View>
-                    )}
-                  </View>
-                  {!!workoutPlan.summary && <Text style={{fontSize:13,color:theme.textMuted,marginTop:6,lineHeight:19}}>{workoutPlan.summary}</Text>}
-                  {(workoutPlan.exercises||[]).map((ex, i) => (
-                    <View key={i} style={[styles.itemCard,{marginTop:12,marginBottom:0}]}>
-                      <View style={styles.rowJustify}>
-                        <Text style={[styles.itemTitle,{fontSize:15}]}>{i+1}. {ex.name}</Text>
-                        <Text style={styles.categoryBadge}>{ex.equipment}</Text>
-                      </View>
-                      <Text style={{marginTop:6,color:theme.textMuted,fontSize:12}}>
-                        Target: {ex.targetMuscle} · {ex.sets} sets × {ex.reps}{ex.restSeconds ? ` · rest ${ex.restSeconds}s` : ''}
-                      </Text>
-                      {!!ex.instructions && <Text style={{marginTop:4,color:theme.textMuted,fontSize:12}}>{ex.instructions}</Text>}
-                    </View>
-                  ))}
-                  {!!workoutPlan.notes && <Text style={{marginTop:12,color:theme.textMuted,fontSize:12,fontStyle:'italic'}}>{workoutPlan.notes}</Text>}
-                </View>
+                  )}/>
+                </>
               )}
 
-              {similarGyms.length > 0 && (
+              {isSectionVisible(selectedGym, 'showWorkoutGenerator') && (
+                <>
+                  <Text style={[styles.sectionLabel,{marginTop:20}]}>✨ AI Workout Generator</Text>
+                  <View style={styles.aiContainer}>
+                    <Text style={{fontSize:13,color:theme.textMuted,marginBottom:10}}>
+                      Builds a workout using only the equipment {selectedGym?.gymName} actually has.
+                    </Text>
+                    <Text style={{fontSize:12,fontWeight:'700',color:theme.textMuted,marginBottom:8,textTransform:'uppercase'}}>Target muscle group(s)</Text>
+                    <View style={{flexDirection:'row',flexWrap:'wrap',gap:8,marginBottom:12}}>
+                      {MUSCLE_GROUPS.map(m => {
+                        const active = workoutMuscles.includes(m);
+                        return (
+                          <TouchableOpacity key={m} onPress={() => toggleWorkoutMuscle(m)}
+                            style={{paddingHorizontal:12,paddingVertical:6,borderRadius:16,backgroundColor: active ? theme.accent : theme.inputBg}}>
+                            <Text style={{fontSize:12,fontWeight:'700',color: active ? '#FFF' : theme.textMuted}}>{m}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                    <View style={{flexDirection:'row',gap:8,marginBottom:12}}>
+                      {EXPERIENCE_LEVELS.map(lvl => (
+                        <TouchableOpacity key={lvl} onPress={() => setWorkoutExperience(lvl)}
+                          style={{flex:1,paddingVertical:9,borderRadius:10,alignItems:'center',backgroundColor: workoutExperience===lvl ? theme.accent : theme.inputBg}}>
+                          <Text style={{fontSize:12,fontWeight:'700',color: workoutExperience===lvl ? '#FFF' : theme.textMuted}}>{lvl}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <TextInput
+                      style={[styles.input,{marginBottom:12}]}
+                      placeholder="Optional goal, e.g. 'training for a 5K'"
+                      placeholderTextColor={theme.placeholder}
+                      value={workoutGoal}
+                      onChangeText={setWorkoutGoal}
+                    />
+                    {!apiKey && (
+                      <TouchableOpacity onPress={() => setShowApiKeyModal(true)} style={styles.aiKeyNudge}>
+                        <Text style={styles.aiKeyNudgeText}>⚡ Add your Anthropic API key to generate a workout →</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity style={[styles.equipAiBtn, !apiKey && styles.equipAiBtnDisabled, {marginTop:12}]} onPress={generateWorkout} disabled={!apiKey || isGeneratingWorkout}>
+                      {isGeneratingWorkout ? <ActivityIndicator color="#FFF"/> : <Text style={styles.equipAiBtnText}>Generate Workout</Text>}
+                    </TouchableOpacity>
+                    {!!workoutError && (
+                      <View style={[styles.equipAiError,{marginTop:12}]}><Text style={{color:'#C62828',fontSize:13}}>{workoutError}</Text></View>
+                    )}
+                  </View>
+
+                  {workoutPlan && (
+                    <View style={[styles.equipAiResults,{marginTop:12}]}>
+                      <View style={styles.rowJustify}>
+                        <Text style={{fontSize:18,fontWeight:'800',color:theme.text,flex:1}}>{workoutPlan.title}</Text>
+                        {!!workoutPlan.estimatedDuration && (
+                          <View style={styles.aiBadge}><Text style={styles.aiBadgeText}>⏱ {workoutPlan.estimatedDuration}</Text></View>
+                        )}
+                      </View>
+                      {!!workoutPlan.summary && <Text style={{fontSize:13,color:theme.textMuted,marginTop:6,lineHeight:19}}>{workoutPlan.summary}</Text>}
+                      {(workoutPlan.exercises||[]).map((ex, i) => (
+                        <View key={i} style={[styles.itemCard,{marginTop:12,marginBottom:0}]}>
+                          <View style={styles.rowJustify}>
+                            <Text style={[styles.itemTitle,{fontSize:15}]}>{i+1}. {ex.name}</Text>
+                            <Text style={styles.categoryBadge}>{ex.equipment}</Text>
+                          </View>
+                          <Text style={{marginTop:6,color:theme.textMuted,fontSize:12}}>
+                            Target: {ex.targetMuscle} · {ex.sets} sets × {ex.reps}{ex.restSeconds ? ` · rest ${ex.restSeconds}s` : ''}
+                          </Text>
+                          {!!ex.instructions && <Text style={{marginTop:4,color:theme.textMuted,fontSize:12}}>{ex.instructions}</Text>}
+                        </View>
+                      ))}
+                      {!!workoutPlan.notes && <Text style={{marginTop:12,color:theme.textMuted,fontSize:12,fontStyle:'italic'}}>{workoutPlan.notes}</Text>}
+                    </View>
+                  )}
+                </>
+              )}
+
+              {isSectionVisible(selectedGym, 'showSimilarGyms') && similarGyms.length > 0 && (
                 <>
                   <Text style={[styles.sectionLabel,{marginTop:20}]}>You might also like</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom:10}}>

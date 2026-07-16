@@ -3,12 +3,13 @@
 import Link from 'next/link';
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getAvgRating, renderStars, isOpenNow, getActivePromotion, uniqueId, buildWorkoutICS } from '../../../../lib/helpers';
+import { getAvgRating, renderStars, isOpenNow, getActivePromotion, uniqueId, buildWorkoutICS, isSectionVisible } from '../../../../lib/helpers';
 import { EQUIP_CATEGORIES, PLATFORM_FEE_RATE, MUSCLE_GROUPS, EXPERIENCE_LEVELS } from '../../../../lib/constants';
 import { upsertUser, addGymReview, uploadReviewPhoto, reportEquipmentIssue } from '../../../../lib/supabase';
 import { getSession, setSession } from '@/lib/auth';
 import { useT } from '@/lib/PreferencesContext';
 import GymCard from '@/components/GymCard';
+import Reveal from '@/components/Reveal';
 
 function buildCheckoutUrl(gym, pass, ref) {
   const params = new URLSearchParams({
@@ -24,7 +25,7 @@ function buildCheckoutUrl(gym, pass, ref) {
 
 export default function GymDetailClient({ gym, similarGyms }) {
   return (
-    <Suspense fallback={<div className="max-w-4xl mx-auto px-6 py-20 text-center text-gray-400">Loading...</div>}>
+    <Suspense fallback={<div className="max-w-6xl mx-auto px-6 py-20 text-center text-gray-400">Loading...</div>}>
       <GymDetailClientInner gym={gym} similarGyms={similarGyms} />
     </Suspense>
   );
@@ -42,7 +43,7 @@ function GymDetailClientInner({ gym: initialGym, similarGyms = [] }) {
 
   if (!gym) {
     return (
-      <div className="max-w-4xl mx-auto px-6 py-20 text-center">
+      <div className="max-w-6xl mx-auto px-6 py-20 text-center">
         <h1 className="text-2xl font-bold mb-2">Gym not found</h1>
         <Link href="/gyms" className="text-brand-text dark:text-blue-400 hover:underline">{t('backToAllGyms')}</Link>
       </div>
@@ -76,7 +77,7 @@ function GymDetailClientInner({ gym: initialGym, similarGyms = [] }) {
   const claimed = !!gym.ownerID;
 
   return (
-    <div className="max-w-4xl mx-auto px-6 py-10">
+    <div className="max-w-6xl mx-auto px-6 py-10">
       <Link href="/gyms" className="text-brand-text dark:text-blue-400 hover:underline text-sm font-semibold">
         {t('backToAllGyms')}
       </Link>
@@ -216,55 +217,57 @@ function GymDetailClientInner({ gym: initialGym, similarGyms = [] }) {
       </div>
 
       {/* Equipment */}
-      <section className="mb-10">
-        <h2 className="text-2xl font-bold mb-4">
-          {t('equipment')} <span className="text-gray-400 dark:text-gray-400 font-normal">({equipment.length})</span>
-        </h2>
+      {isSectionVisible(gym, 'showEquipment') && (
+        <Reveal as="section" className="mb-10">
+          <h2 className="text-2xl font-bold mb-4">
+            {t('equipment')} <span className="text-gray-400 dark:text-gray-400 font-normal">({equipment.length})</span>
+          </h2>
 
-        <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Filter equipment by category">
-          {['All', ...EQUIP_CATEGORIES].map((cat) => (
-            <button
-              key={cat}
-              onClick={() => setEquipFilter(cat)}
-              aria-pressed={equipFilter === cat}
-              className={
-                'px-4 py-2 rounded-full text-sm font-semibold transition ' +
-                (equipFilter === cat
-                  ? 'bg-brand text-white'
-                  : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700')
-              }
-            >
-              {cat}
-            </button>
-          ))}
-        </div>
-
-        {equipment.length === 0 ? (
-          <p className="text-gray-500 dark:text-gray-400 italic">No equipment in this category.</p>
-        ) : (
-          <ul className="grid sm:grid-cols-2 gap-3">
-            {equipment.map((eq) => (
-              <EquipmentCard key={eq.id} eq={eq} gym={gym} />
+          <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Filter equipment by category">
+            {['All', ...EQUIP_CATEGORIES].map((cat) => (
+              <button
+                key={cat}
+                onClick={() => setEquipFilter(cat)}
+                aria-pressed={equipFilter === cat}
+                className={
+                  'px-4 py-2 rounded-full text-sm font-semibold transition ' +
+                  (equipFilter === cat
+                    ? 'bg-brand text-white'
+                    : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700')
+                }
+              >
+                {cat}
+              </button>
             ))}
-          </ul>
-        )}
-      </section>
+          </div>
+
+          {equipment.length === 0 ? (
+            <p className="text-gray-500 dark:text-gray-400 italic">No equipment in this category.</p>
+          ) : (
+            <ul className="grid sm:grid-cols-2 gap-3">
+              {equipment.map((eq) => (
+                <EquipmentCard key={eq.id} eq={eq} gym={gym} />
+              ))}
+            </ul>
+          )}
+        </Reveal>
+      )}
 
       {/* AI Workout Generator */}
-      <WorkoutGeneratorSection gym={gym} />
+      {isSectionVisible(gym, 'showWorkoutGenerator') && <WorkoutGeneratorSection gym={gym} />}
 
       {/* Similar gyms */}
-      {similarGyms.length > 0 && (
-        <section className="mb-10">
+      {isSectionVisible(gym, 'showSimilarGyms') && similarGyms.length > 0 && (
+        <Reveal as="section" className="mb-10">
           <h2 className="text-2xl font-bold mb-4">You might also like</h2>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
             {similarGyms.map((g) => <GymCard key={g.id} gym={g} />)}
           </div>
-        </section>
+        </Reveal>
       )}
 
       {/* Reviews */}
-      <section>
+      <Reveal as="section">
         <h2 className="text-2xl font-bold mb-4">{t('memberReviews')}</h2>
         {(gym.gymReviews || []).length === 0 ? (
           <p className="text-gray-500 dark:text-gray-400 italic mb-4">Be the first to review this gym!</p>
@@ -295,7 +298,7 @@ function GymDetailClientInner({ gym: initialGym, similarGyms = [] }) {
           </ul>
         )}
         <ReviewForm gym={gym} onSubmitted={(updatedGym) => setGym(updatedGym)} />
-      </section>
+      </Reveal>
     </div>
   );
 }

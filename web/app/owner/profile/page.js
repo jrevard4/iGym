@@ -1,8 +1,8 @@
 'use client';
 
 import { useState } from 'react';
-import { CLASS_TYPES, PRESET_PASSES, PRESET_MEMBERSHIPS, AMENITIES } from '../../../../lib/constants';
-import { uniqueId, getActivePromotion, renderStars } from '../../../../lib/helpers';
+import { CLASS_TYPES, PRESET_PASSES, PRESET_MEMBERSHIPS, AMENITIES, PAGE_SECTIONS } from '../../../../lib/constants';
+import { uniqueId, getActivePromotion, renderStars, isSectionVisible } from '../../../../lib/helpers';
 import { respondToReview } from '../../../../lib/supabase';
 import { useOwnerContext } from '@/lib/ownerContext';
 
@@ -161,6 +161,13 @@ export default function OwnerProfilePage() {
     await persistOwner(updated);
   };
 
+  const togglePageSection = async (key) => {
+    const current = isSectionVisible(form, key);
+    const updated = { ...owner, ...form, pageSettings: { ...(form.pageSettings || {}), [key]: !current } };
+    setForm(updated);
+    await persistOwner(updated);
+  };
+
   return (
     <div className="max-w-2xl space-y-8">
       <div>
@@ -284,6 +291,33 @@ export default function OwnerProfilePage() {
             {form.website?.trim() ? 'Nothing detected yet — save your profile to scan your website.' : 'Add a website URL above to enable this.'}
           </p>
         )}
+      </div>
+
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-1">👁️ Page visibility</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+          Choose what shows on your public gym page. Hiding a section doesn't delete anything — it just stays off your page until you turn it back on.
+        </p>
+        <ul className="divide-y divide-gray-100 dark:divide-gray-800">
+          {PAGE_SECTIONS.map((s) => {
+            const visible = isSectionVisible(form, s.key);
+            return (
+              <li key={s.key} className="flex items-center justify-between py-2.5">
+                <span className="text-sm text-gray-700 dark:text-gray-300">{s.label}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={visible}
+                  aria-label={`${visible ? 'Hide' : 'Show'} ${s.label}`}
+                  onClick={() => togglePageSection(s.key)}
+                  className={'relative w-11 h-6 rounded-full transition shrink-0 ' + (visible ? 'bg-brand' : 'bg-gray-300 dark:bg-gray-700')}
+                >
+                  <span className={'absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ' + (visible ? 'translate-x-5' : 'translate-x-0')} />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
       </div>
 
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">

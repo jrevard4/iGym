@@ -33,3 +33,23 @@ html {
 /* Hide focus ring on click, keep it on keyboard nav */
 :focus:not(:focus-visible) { outline: none; }
 :focus-visible { outline: 2px solid #007AFF; outline-offset: 2px; }
+
+/* Hero entrance animation (web/app/page.js) — a plain CSS keyframe since it
+   plays once on initial paint rather than on scroll (see components/Reveal.js
+   for the scroll-triggered version used further down the page). */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Neutralizes every CSS animation/transition site-wide for users who've
+   asked for reduced motion — covers the hero's fadeInUp above in addition to
+   any transition classes, so this doesn't need touching per-animation. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

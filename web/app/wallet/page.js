@@ -159,19 +159,32 @@ export default function WalletPage() {
 // ─── Streak card ──────────────────────────────────────────────────────────
 function StreakCard({ checkins }) {
   const stats = computeCheckinStats(checkins);
+  // Mirrors the mobile Profile tab's nudge: at risk when there's a live
+  // streak but no check-in yet today (i.e. it'll break if they skip today).
+  const lastCheckinMs = checkins.length > 0 ? Math.max(...checkins.map((c) => new Date(c.created_at).getTime())) : 0;
+  const checkedInToday = lastCheckinMs > 0 && new Date(lastCheckinMs).toDateString() === new Date().toDateString();
+  const streakAtRisk = stats.currentStreak > 0 && !checkedInToday;
+
   return (
-    <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5 mb-8">
-      <div className="flex justify-between items-center">
-        <span className="font-bold text-indigo-700">🔥 {stats.currentStreak}-day streak</span>
-        <span className="font-semibold text-indigo-700">{stats.totalVisits} visits</span>
+    <div className="mb-8">
+      <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-5">
+        <div className="flex justify-between items-center">
+          <span className="font-bold text-indigo-700">🔥 {stats.currentStreak}-day streak</span>
+          <span className="font-semibold text-indigo-700">{stats.totalVisits} visits</span>
+        </div>
+        {stats.badges.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {stats.badges.map((b) => (
+              <span key={b.threshold} className="bg-white border border-indigo-200 text-indigo-700 text-xs font-bold px-3 py-1 rounded-full">
+                🏅 {b.label}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
-      {stats.badges.length > 0 && (
-        <div className="flex flex-wrap gap-2 mt-3">
-          {stats.badges.map((b) => (
-            <span key={b.threshold} className="bg-white border border-indigo-200 text-indigo-700 text-xs font-bold px-3 py-1 rounded-full">
-              🏅 {b.label}
-            </span>
-          ))}
+      {streakAtRisk && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mt-3">
+          <span className="text-sm font-bold text-amber-800">⏰ Don&apos;t lose your streak — check in today!</span>
         </div>
       )}
     </div>
