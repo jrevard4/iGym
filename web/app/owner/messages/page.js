@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useOwnerContext } from '@/lib/ownerContext';
 import { loadGymConversations, loadConversation, sendMessage, markConversationRead } from '../../../../lib/supabase';
 import { notifyUser } from '../../../../lib/notify';
@@ -8,20 +9,22 @@ import { notifyUser } from '../../../../lib/notify';
 const cls = 'flex-1 px-3.5 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg text-sm focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none';
 
 export default function OwnerMessagesPage() {
+  return (
+    <Suspense fallback={<div className="text-center text-gray-400 py-20">Loading...</div>}>
+      <OwnerMessagesPageInner />
+    </Suspense>
+  );
+}
+
+function OwnerMessagesPageInner() {
   const { owner } = useOwnerContext();
+  const searchParams = useSearchParams();
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
   const [thread, setThread] = useState([]);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
-
-  useEffect(() => {
-    (async () => {
-      setConversations(await loadGymConversations(owner.id));
-      setLoading(false);
-    })();
-  }, [owner.id]);
 
   const openConversation = async (convo) => {
     setSelected(convo);
@@ -30,6 +33,23 @@ export default function OwnerMessagesPage() {
     await markConversationRead(owner.id, convo.userId, 'owner');
     setConversations((prev) => prev.map((c) => (c.userId === convo.userId ? { ...c, unreadCount: 0 } : c)));
   };
+
+  useEffect(() => {
+    (async () => {
+      const convos = await loadGymConversations(owner.id);
+      setConversations(convos);
+      setLoading(false);
+
+      // Deep-link from elsewhere in the owner portal (e.g. the "Message"
+      // link next to an at-risk membership on the Analytics page).
+      const targetUserId = searchParams.get('userId');
+      if (targetUserId) {
+        const existing = convos.find((c) => c.userId === targetUserId);
+        openConversation(existing || { userId: targetUserId, username: searchParams.get('username') || null });
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [owner.id]);
 
   const reply = async (e) => {
     e.preventDefault();
