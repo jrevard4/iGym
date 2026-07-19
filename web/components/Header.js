@@ -36,6 +36,7 @@ export default function Header() {
           {user && <Link href="/wallet" className="hover:text-brand-text dark:hover:text-blue-400">{t('wallet')}</Link>}
           {/* Secondary links — kept off the nav below lg so the existing sm+ pair above never wraps. */}
           <Link href="/gyms/city" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">Browse by City</Link>
+          <Link href="/classes" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">Upcoming Classes</Link>
           {user && <Link href="/wallet#workouts" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">My Workouts</Link>}
           {user && <Link href="/wallet#referral" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">Invite &amp; Earn</Link>}
           <Link href="/owner/login" className="hidden lg:inline hover:text-brand-text dark:hover:text-blue-400">Owner Portal</Link>

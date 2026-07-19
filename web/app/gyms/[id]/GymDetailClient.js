@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { getAvgRating, renderStars, isOpenNow, getActivePromotion, uniqueId, buildWorkoutICS, isSectionVisible, getUpcomingClassOccurrences, countBookedForOccurrence } from '../../../../lib/helpers';
 import { EQUIP_CATEGORIES, PLATFORM_FEE_RATE, MUSCLE_GROUPS, EXPERIENCE_LEVELS } from '../../../../lib/constants';
 import { upsertUser, addGymReview, uploadReviewPhoto, reportEquipmentIssue, loadGymClassBookings, bookClass, sendMessage, loadConversation } from '../../../../lib/supabase';
+import { notifyGym } from '../../../../lib/notify';
 import { getSession, setSession } from '@/lib/auth';
 import { useT } from '@/lib/PreferencesContext';
 import GymCard from '@/components/GymCard';
@@ -810,6 +811,7 @@ function MessageWidget({ gym }) {
       const msg = await sendMessage(gym.id, session.id, session.username, 'member', text.trim());
       setThread((prev) => [...prev, msg]);
       setText('');
+      notifyGym(gym.id, `New message from @${session.username}`, msg.text);
     } finally {
       setSending(false);
     }

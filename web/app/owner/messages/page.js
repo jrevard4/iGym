@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useOwnerContext } from '@/lib/ownerContext';
 import { loadGymConversations, loadConversation, sendMessage, markConversationRead } from '../../../../lib/supabase';
+import { notifyUser } from '../../../../lib/notify';
 
 const cls = 'flex-1 px-3.5 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg text-sm focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none';
 
@@ -38,6 +39,7 @@ export default function OwnerMessagesPage() {
       const msg = await sendMessage(owner.id, selected.userId, selected.username, 'owner', text.trim());
       setThread((prev) => [...prev, msg]);
       setText('');
+      notifyUser(selected.userId, `Message from ${owner.gymName}`, msg.text);
     } finally {
       setSending(false);
     }

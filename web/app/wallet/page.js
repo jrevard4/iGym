@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { getSession, setSession } from '@/lib/auth';
 import { loadUserPasses, loadUserCheckins, getUserById, upsertUser, updatePass, loadUserClassBookings, cancelClassBooking } from '../../../lib/supabase';
 import { computeCheckinStats, buildWorkoutICS } from '../../../lib/helpers';
+import { notifyUser } from '../../../lib/notify';
 import env from '../../../lib/env';
 
 function downloadICS(workout) {
@@ -85,8 +86,11 @@ export default function WalletPage() {
 
   const cancelBooking = async (booking) => {
     if (!confirm(`Cancel your spot in ${booking.className}?`)) return;
-    await cancelClassBooking(booking.id);
+    const { promoted } = await cancelClassBooking(booking.id);
     setClassBookings((prev) => prev.filter((b) => b.id !== booking.id));
+    if (promoted) {
+      notifyUser(promoted.userId, "You're off the waitlist!", `A spot opened up in ${promoted.className} — you're booked in.`);
+    }
   };
 
   // The referral/workouts sections only mount once loading finishes, so the

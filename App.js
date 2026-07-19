@@ -25,12 +25,12 @@ import env from './lib/env';
 import {
   CLASS_TYPES, EQUIP_CATEGORIES, PLAN_TIERS, US_STATES, PRESET_PASSES,
   DEFAULT_LOCATION, PLATFORM_FEE_RATE, MEMBER_PREMIUM_PRICE, BRAND_WEBSITES,
-  MUSCLE_GROUPS, EXPERIENCE_LEVELS, AMENITIES, PAGE_SECTIONS,
+  MUSCLE_GROUPS, EXPERIENCE_LEVELS, AMENITIES, PAGE_SECTIONS, DAYS_OF_WEEK,
 } from './lib/constants';
 import {
   getDistanceMiles, getAvgRating, renderStars, isOpenNow, getAIMatchScore,
   runLocalMatch, uniqueId, getActivePromotion, computeCheckinStats, findSimilarGyms,
-  stripHtmlToText, extractKeywords, isSectionVisible,
+  stripHtmlToText, extractKeywords, isSectionVisible, getUpcomingClassOccurrences, countBookedForOccurrence,
 } from './lib/helpers';
 import { parseProductFromHtml } from './lib/productImport';
 import {
@@ -40,7 +40,10 @@ import {
   getPassById, seedRealGymsIfNeeded, loadGymPasses, redeemReferral, redeemGymReferral, incrementMatchImpressions,
   recordCheckin, loadUserCheckins, getUserByReferralCode, recordReferralReward, registerGuestUser,
   reportEquipmentIssue, respondToReview, uploadPhotoFromUri,
+  bookClass, cancelClassBooking, loadUserClassBookings, loadGymClassBookings,
+  sendMessage, loadConversation, markConversationRead, loadGymConversations,
 } from './lib/supabase';
+import { notifyUser, notifyGym } from './lib/notify';
 import { matchmakerSearch, identifyEquipmentFromImage, searchEquipmentOnWeb, generateWorkoutPlan, AIError } from './lib/ai';
 import { sendPushNotifications } from './lib/push';
 import { GLOBAL_EQUIPMENT_DATABASE } from './lib/equipment-db';
@@ -223,9 +226,22 @@ function IGymApp() {
   const [searchFilters, setSearchFilters] = useState({
     radius:'15', maxPrice:'', reqEquipCategory:'All',
     reqMinWeight:'', reqMaxWeight:'', reqClass:'All', targetMuscle:'', openNow: false,
-    amenities: [],
+    amenities: [], minRating: 0, activePromosOnly: false,
   });
   const [gymSortBy, setGymSortBy] = useState('DISTANCE');
+
+  // --- Classes & booking ---
+  const [gymClassBookings, setGymClassBookings] = useState([]);
+  const [myClassBookings, setMyClassBookings] = useState([]);
+  const [newClassSlot, setNewClassSlot] = useState({ className:'', dayOfWeek:'1', startTime:'06:00', durationMinutes:'45', capacity:'15', instructor:'' });
+  const [ownerRoster, setOwnerRoster] = useState([]);
+
+  // --- Messaging ---
+  const [gymConversations, setGymConversations] = useState([]);
+  const [activeConversation, setActiveConversation] = useState(null); // { userId, username } — owner side
+  const [messageThread, setMessageThread] = useState([]);
+  const [messageDraft, setMessageDraft] = useState('');
+  const [sendingMessage, setSendingMessage] = useState(false);
 
   // --- Tabs ---
   const [ownerTab, setOwnerTab] = useState('DESK');
@@ -287,6 +303,27 @@ function IGymApp() {
     loadUserCheckins(currentUser.id).then(setMemberCheckins);
   }, [currentUser?.id]);
 
+  useEffect(() => {
+    if (!currentUser?.id) { setMyClassBookings([]); return; }
+    loadUserClassBookings(currentUser.id).then(setMyClassBookings);
+  }, [currentUser?.id]);
+
+  // Loads bookings for whichever gym is currently open, so the Classes
+  // section on GYM_DETAIL can show live seat counts.
+  useEffect(() => {
+    if (!selectedGym?.id || !(selectedGym.classSchedule || []).length) { setGymClassBookings([]); return; }
+    loadGymClassBookings(selectedGym.id).then(setGymClassBookings);
+  }, [selectedGym?.id, selectedGym?.classSchedule]);
+
+  // Member's "message this gym" widget on GYM_DETAIL reuses the same
+  // messageThread/messageDraft state as the owner's inbox — clear both
+  // whenever the viewed gym changes so a stale thread from the previous
+  // gym never flashes before the member re-opens the conversation.
+  useEffect(() => {
+    setMessageThread([]);
+    setMessageDraft('');
+  }, [selectedGym?.id]);
+
   // --- BOOT ---
   useEffect(() => {
     const loadData = async () => {
@@ -337,6 +374,9 @@ function IGymApp() {
           const freshOwner = (gyms || []).find(o => o.id === cached.id) || cached;
           setCurrentOwner(freshOwner); setInfoForm(freshOwner);
           setCurrentScreen('OWNER_DASHBOARD');
+          registerForPushToken().then(pushToken => {
+            if (pushToken && pushToken !== freshOwner.pushToken) upsertGym({ ...freshOwner, pushToken });
+          });
         }
       } catch (e) {
         console.error('Boot error:', e);
@@ -604,9 +644,11 @@ function IGymApp() {
   const handlePaymentSubmit = async () => {
     setIsProcessingPayment(true);
     try {
-      let clientSecret;
+      const isMembership = selectedPass?.type === 'MEMBERSHIP';
+      let clientSecret, subscriptionInfo = null;
       try {
-        const res = await fetch(`${env.BACKEND_URL}/create-payment-intent`, {
+        const endpoint = isMembership ? 'create-subscription' : 'create-payment-intent';
+        const res = await fetch(`${env.BACKEND_URL}/${endpoint}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -615,11 +657,14 @@ function IGymApp() {
             passLabel: selectedPass?.label,
             gymId: selectedGym?.id,
             userId: currentUser?.id,
+            email: currentUser?.email,
+            billingIntervalDays: selectedPass?.value,
           }),
         });
         const json = await res.json();
         if (json.error) throw new Error(json.error);
         clientSecret = json.clientSecret;
+        if (json.subscriptionId) subscriptionInfo = { subscriptionId: json.subscriptionId, customerId: json.customerId };
       } catch (backendErr) {
         console.warn('Backend unreachable, demo mode:', backendErr.message);
         clientSecret = null;
@@ -666,6 +711,7 @@ function IGymApp() {
         expiresAt: expiresAt?.toISOString() || null,
         remainingPunches, totalPunches: remainingPunches,
         stripePaymentId: clientSecret ? clientSecret.split('_secret_')[0] : 'demo',
+        ...(subscriptionInfo && { stripeSubscriptionId: subscriptionInfo.subscriptionId, stripeCustomerId: subscriptionInfo.customerId, status: 'active' }),
       };
 
       await savePass(newPass, currentUser.id);
@@ -705,6 +751,130 @@ function IGymApp() {
       console.error('[Payment]', err);
       setIsProcessingPayment(false);
       Alert.alert('Payment Error', err.message || 'Something went wrong. Please try again.');
+    }
+  };
+
+  const cancelMembership = async (pass) => {
+    Alert.alert(
+      'Cancel auto-renew?',
+      `You'll keep access to ${pass.label} until it expires on ${new Date(pass.expiresAt).toLocaleDateString()}.`,
+      [
+        { text: 'Never mind', style: 'cancel' },
+        {
+          text: 'Cancel auto-renew', style: 'destructive', onPress: async () => {
+            try {
+              await fetch(`${env.BACKEND_URL}/cancel-subscription`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ subscriptionId: pass.stripeSubscriptionId }),
+              });
+            } catch (err) {
+              console.warn('[cancelMembership] backend unreachable:', err.message);
+            }
+            await updatePass(pass.id, { status: 'canceled' });
+            const updatedPasses = (currentUser.activePasses || []).map(p => p.id === pass.id ? { ...p, status: 'canceled' } : p);
+            const updatedUser = { ...currentUser, activePasses: updatedPasses };
+            setCurrentUser(updatedUser);
+            await AsyncStorage.setItem('@active_user', JSON.stringify(updatedUser));
+          },
+        },
+      ]
+    );
+  };
+
+  const bookGymClass = async (occurrence) => {
+    if (!currentUser) return;
+    try {
+      const booking = await bookClass({
+        gymId: selectedGym.id, classScheduleId: occurrence.id, className: occurrence.className,
+        classDate: occurrence.classDate, capacity: occurrence.capacity,
+        userId: currentUser.id, username: currentUser.username,
+      });
+      setGymClassBookings(prev => [...prev, booking]);
+      Alert.alert(booking.status === 'waitlisted' ? 'Waitlisted' : 'Booked!', `You're ${booking.status === 'waitlisted' ? 'on the waitlist for' : 'booked into'} ${occurrence.className}.`);
+    } catch (err) {
+      Alert.alert('Could not book', err.message || 'Please try again.');
+    }
+  };
+
+  const loadMyClassBookings = async () => {
+    if (!currentUser?.id) return;
+    setMyClassBookings(await loadUserClassBookings(currentUser.id));
+  };
+
+  const cancelMyBooking = async (booking) => {
+    const { promoted } = await cancelClassBooking(booking.id);
+    setMyClassBookings(prev => prev.filter(b => b.id !== booking.id));
+    if (promoted) {
+      notifyUser(promoted.userId, "You're off the waitlist!", `A spot opened up in ${promoted.className} — you're booked in.`);
+    }
+  };
+
+  const addClassSlot = async () => {
+    if (!newClassSlot.className.trim()) return;
+    const slot = {
+      id: uniqueId('cs_'), className: newClassSlot.className.trim(),
+      dayOfWeek: parseInt(newClassSlot.dayOfWeek), startTime: newClassSlot.startTime,
+      durationMinutes: parseInt(newClassSlot.durationMinutes) || 45,
+      capacity: parseInt(newClassSlot.capacity) || 0,
+      instructor: newClassSlot.instructor.trim(),
+    };
+    const updated = { ...currentOwner, classSchedule: [...(currentOwner.classSchedule || []), slot] };
+    await persistOwner(updated);
+    setNewClassSlot(s => ({ ...s, instructor: '' }));
+  };
+
+  const removeClassSlot = async (id) => {
+    const updated = { ...currentOwner, classSchedule: (currentOwner.classSchedule || []).filter(s => s.id !== id) };
+    await persistOwner(updated);
+  };
+
+  const loadOwnerRoster = async () => {
+    if (!currentOwner?.id) return;
+    setOwnerRoster(await loadGymClassBookings(currentOwner.id));
+  };
+
+  const loadOwnerConversations = async () => {
+    if (!currentOwner?.id) return;
+    setGymConversations(await loadGymConversations(currentOwner.id));
+  };
+
+  const openConversation = async (convo) => {
+    setActiveConversation(convo);
+    const rows = await loadConversation(currentOwner.id, convo.userId);
+    setMessageThread(rows);
+    await markConversationRead(currentOwner.id, convo.userId, 'owner');
+    setGymConversations(prev => prev.map(c => c.userId === convo.userId ? { ...c, unreadCount: 0 } : c));
+  };
+
+  const sendOwnerReply = async () => {
+    if (!messageDraft.trim() || !activeConversation) return;
+    setSendingMessage(true);
+    try {
+      const msg = await sendMessage(currentOwner.id, activeConversation.userId, activeConversation.username, 'owner', messageDraft.trim());
+      setMessageThread(prev => [...prev, msg]);
+      setMessageDraft('');
+      notifyUser(activeConversation.userId, `Message from ${currentOwner.gymName}`, msg.text);
+    } finally {
+      setSendingMessage(false);
+    }
+  };
+
+  const openMemberMessageThread = async () => {
+    if (!currentUser || !selectedGym) return;
+    setMessageThread(await loadConversation(selectedGym.id, currentUser.id));
+  };
+
+  const sendMemberMessage = async () => {
+    if (!messageDraft.trim() || !currentUser || !selectedGym) return;
+    setSendingMessage(true);
+    try {
+      const msg = await sendMessage(selectedGym.id, currentUser.id, currentUser.username, 'member', messageDraft.trim());
+      setMessageThread(prev => [...prev, msg]);
+      setMessageDraft('');
+      notifyGym(selectedGym.id, `New message from @${currentUser.username}`, msg.text);
+    } finally {
+      setSendingMessage(false);
     }
   };
 
@@ -875,6 +1045,13 @@ function IGymApp() {
       setCurrentOwner(owner); setInfoForm(owner); setOwnerTab('DESK');
       await AsyncStorage.setItem('@active_owner', JSON.stringify(owner));
       navigateTo('OWNER_DASHBOARD');
+      registerForPushToken().then(pushToken => {
+        if (pushToken && pushToken !== owner.pushToken) {
+          const updated = { ...owner, pushToken };
+          upsertGym(updated);
+          setCurrentOwner(updated);
+        }
+      });
     } else {
       Alert.alert('Unauthorized', 'Invalid management credentials.');
     }
@@ -1550,7 +1727,7 @@ function IGymApp() {
               </View>
 
               <View style={styles.tabRow}>
-                {[['DESK','Desk'],['EQUIP','Inventory'],['INFO','Profile'],['TRAINERS','Trainers'],['MEMBERS','Members'],['ANALYTICS','Analytics']].map(([key,label]) => (
+                {[['DESK','Desk'],['EQUIP','Inventory'],['INFO','Profile'],['CLASSES','Classes'],['TRAINERS','Trainers'],['MEMBERS','Members'],['MESSAGES','Messages'],['ANALYTICS','Analytics']].map(([key,label]) => (
                   <TouchableOpacity key={key} style={[styles.tabBtn, ownerTab===key && styles.tabBtnActive]} onPress={async () => {
                     setOwnerTab(key);
                     if (key === 'MEMBERS' && currentOwner) {
@@ -1559,6 +1736,8 @@ function IGymApp() {
                       catch(e) { console.warn('loadGymPasses:', e.message); }
                       finally { setOwnerMembersLoading(false); }
                     }
+                    if (key === 'CLASSES') loadOwnerRoster();
+                    if (key === 'MESSAGES') loadOwnerConversations();
                   }}>
                     <Text style={[styles.tabBtnText, ownerTab===key && styles.tabBtnTextActive]}>{label}</Text>
                   </TouchableOpacity>
@@ -2013,6 +2192,104 @@ function IGymApp() {
                   )}
                 </View>
               )}
+
+              {ownerTab === 'CLASSES' && (() => {
+                const schedule = currentOwner?.classSchedule || [];
+                const occurrences = getUpcomingClassOccurrences(currentOwner, 2);
+                return (
+                  <View>
+                    <Text style={styles.sectionLabel}>+ Add a Weekly Class</Text>
+                    <View style={styles.infoBox}>
+                      <TextInput style={styles.input} placeholder="Class name (e.g. Morning Yoga)" value={newClassSlot.className} onChangeText={t => setNewClassSlot(s=>({...s,className:t}))}/>
+                      <View style={styles.row}>
+                        <TouchableOpacity style={[styles.input,{flex:1,marginRight:10,justifyContent:'center'}]} onPress={() => {
+                          const next = (parseInt(newClassSlot.dayOfWeek)+1) % 7;
+                          setNewClassSlot(s=>({...s,dayOfWeek:String(next)}));
+                        }}>
+                          <Text>{DAYS_OF_WEEK[parseInt(newClassSlot.dayOfWeek)]} (tap to change)</Text>
+                        </TouchableOpacity>
+                        <TextInput style={[styles.input,{flex:1}]} placeholder="Start (HH:MM)" value={newClassSlot.startTime} onChangeText={t => setNewClassSlot(s=>({...s,startTime:t}))}/>
+                      </View>
+                      <View style={styles.row}>
+                        <TextInput style={[styles.input,{flex:1,marginRight:10}]} placeholder="Duration (min)" value={String(newClassSlot.durationMinutes)} onChangeText={t => setNewClassSlot(s=>({...s,durationMinutes:t}))} keyboardType="numeric"/>
+                        <TextInput style={[styles.input,{flex:1}]} placeholder="Capacity" value={String(newClassSlot.capacity)} onChangeText={t => setNewClassSlot(s=>({...s,capacity:t}))} keyboardType="numeric"/>
+                      </View>
+                      <TextInput style={styles.input} placeholder="Instructor (optional)" value={newClassSlot.instructor} onChangeText={t => setNewClassSlot(s=>({...s,instructor:t}))}/>
+                      <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#007AFF'}]} onPress={addClassSlot}><Text style={styles.btnText}>+ Add to Schedule</Text></TouchableOpacity>
+                    </View>
+
+                    <Text style={[styles.sectionLabel,{marginTop:20}]}>This Week's Schedule</Text>
+                    {schedule.length === 0 ? <Text style={{color:'#999',fontStyle:'italic'}}>No recurring classes yet.</Text> : (
+                      [...schedule].sort((a,b) => a.dayOfWeek-b.dayOfWeek || a.startTime.localeCompare(b.startTime)).map(s => (
+                        <View key={s.id} style={styles.itemCard}>
+                          <View style={styles.rowJustify}>
+                            <View>
+                              <Text style={styles.itemTitle}>{s.className}</Text>
+                              <Text style={{color:'#666',fontSize:12,marginTop:2}}>{DAYS_OF_WEEK[s.dayOfWeek]}s · {s.startTime} · {s.durationMinutes}min · cap {s.capacity}{s.instructor ? ` · ${s.instructor}` : ''}</Text>
+                            </View>
+                            <TouchableOpacity onPress={() => removeClassSlot(s.id)}><Text style={{color:'#FF3B30',fontWeight:'700',fontSize:12}}>Remove</Text></TouchableOpacity>
+                          </View>
+                        </View>
+                      ))
+                    )}
+
+                    <Text style={[styles.sectionLabel,{marginTop:20}]}>Upcoming Roster</Text>
+                    {occurrences.length === 0 ? <Text style={{color:'#999',fontStyle:'italic'}}>Add a class above to see bookings.</Text> : occurrences.map(occ => {
+                      const booked = countBookedForOccurrence(ownerRoster, occ.id, occ.classDate);
+                      const roster = ownerRoster.filter(b => b.classScheduleId===occ.id && b.classDate===occ.classDate && b.status!=='cancelled');
+                      return (
+                        <View key={`${occ.id}-${occ.classDate}`} style={styles.itemCard}>
+                          <View style={styles.rowJustify}>
+                            <View>
+                              <Text style={styles.itemTitle}>{occ.className}</Text>
+                              <Text style={{color:'#666',fontSize:12,marginTop:2}}>{new Date(occ.classDate).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})} · {occ.startTime}</Text>
+                            </View>
+                            <Text style={{fontWeight:'800',color: booked >= occ.capacity ? '#FF3B30' : '#34C759'}}>{booked}/{occ.capacity||'∞'}</Text>
+                          </View>
+                          {roster.length > 0 && <Text style={{color:'#888',fontSize:12,marginTop:4}}>{roster.map(r=>r.username).join(', ')}</Text>}
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
+
+              {ownerTab === 'MESSAGES' && (
+                <View>
+                  {!activeConversation ? (
+                    gymConversations.length === 0 ? <Text style={{color:'#999',fontStyle:'italic'}}>No messages yet.</Text> : (
+                      gymConversations.map(c => (
+                        <TouchableOpacity key={c.userId} style={styles.itemCard} onPress={() => openConversation(c)}>
+                          <View style={styles.rowJustify}>
+                            <Text style={styles.itemTitle}>@{c.username || c.lastMessage?.username || 'member'}</Text>
+                            {c.unreadCount > 0 && (
+                              <View style={{backgroundColor:theme.brand,borderRadius:10,paddingHorizontal:7,paddingVertical:2}}>
+                                <Text style={{color:'#FFF',fontWeight:'800',fontSize:11}}>{c.unreadCount}</Text>
+                              </View>
+                            )}
+                          </View>
+                          <Text style={{color:'#666',fontSize:13,marginTop:4}} numberOfLines={1}>{c.lastMessage?.text}</Text>
+                        </TouchableOpacity>
+                      ))
+                    )
+                  ) : (
+                    <View>
+                      <TouchableOpacity onPress={() => { setActiveConversation(null); setMessageThread([]); }}><Text style={styles.backLink}>← All conversations</Text></TouchableOpacity>
+                      <Text style={[styles.sectionLabel,{marginTop:10}]}>@{activeConversation.username}</Text>
+                      {messageThread.map(m => (
+                        <View key={m.id} style={{alignSelf: m.senderRole==='owner' ? 'flex-end' : 'flex-start', backgroundColor: m.senderRole==='owner' ? theme.brand+'20' : '#F0F0F0', borderRadius:10, padding:10, marginBottom:8, maxWidth:'85%'}}>
+                          <Text style={{color:'#333'}}>{m.text}</Text>
+                        </View>
+                      ))}
+                      <View style={[styles.row,{marginTop:10}]}>
+                        <TextInput style={[styles.input,{flex:1,marginRight:10,marginBottom:0}]} placeholder="Write a reply..." value={messageDraft} onChangeText={setMessageDraft}/>
+                        <TouchableOpacity style={[styles.primaryBtn,{paddingHorizontal:20}]} onPress={sendOwnerReply} disabled={sendingMessage}><Text style={styles.btnText}>Send</Text></TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                </View>
+              )}
+
               <View style={{height:40}}/>
             </ScrollView>
           </SafeAreaView>
@@ -2385,11 +2662,14 @@ function IGymApp() {
         const favoriteGyms = ownerDatabase.filter(g => (currentUser?.favorites||[]).includes(g.id));
         const customerFilteredGyms = ownerDatabase.filter(gym => {
           if (!gym.lat || !gym.lon) return false;
+          if (gym.suspended) return false;
           const dist = getDistanceMiles(userLocation.latitude, userLocation.longitude, gym.lat, gym.lon);
           if (dist > parseFloat(searchFilters.radius||9999)) return false;
           if (searchFilters.maxPrice && gym.monthlyPrice > parseFloat(searchFilters.maxPrice)) return false;
           if (searchFilters.reqClass!=='All' && !(gym.classes||[]).includes(searchFilters.reqClass)) return false;
           if (searchFilters.openNow) { const open = isOpenNow(gym); if (open === false) return false; }
+          if (searchFilters.minRating > 0 && getAvgRating(gym.gymReviews) < searchFilters.minRating) return false;
+          if (searchFilters.activePromosOnly && !getActivePromotion(gym)) return false;
           if ((searchFilters.amenities||[]).length > 0 && !searchFilters.amenities.every(a => (gym.amenities||[]).includes(a))) return false;
           if (searchFilters.reqEquipCategory!=='All'||searchFilters.reqMinWeight||searchFilters.reqMaxWeight||searchFilters.targetMuscle) {
             const hasEquip = (gym.equipment||[]).some(eq => {
@@ -2780,10 +3060,44 @@ function IGymApp() {
                             {hasPunch && <Text style={{color:'#007AFF',fontWeight:'700',fontSize:12}}>{pass.remainingPunches}/{pass.totalPunches} scans left</Text>}
                             {daysLeft !== null && <Text style={{color:daysLeft<=3?'#FF3B30':'#666',fontWeight:'600',fontSize:12}}>{daysLeft <= 0 ? 'Expires today' : `${daysLeft}d remaining`}</Text>}
                           </View>
+                          {pass.stripeSubscriptionId && (
+                            <View style={[styles.rowJustify,{marginTop:8,paddingTop:8,borderTopWidth:1,borderTopColor:'#EEE'}]}>
+                              {pass.status === 'canceled' ? (
+                                <Text style={{color:'#888',fontWeight:'600',fontSize:11}}>Auto-renew canceled</Text>
+                              ) : pass.status === 'past_due' ? (
+                                <Text style={{color:'#FF3B30',fontWeight:'700',fontSize:11}}>⚠ Last payment failed</Text>
+                              ) : (
+                                <Text style={{color:'#007AFF',fontWeight:'700',fontSize:11}}>🔁 Auto-renews every {pass.value}d</Text>
+                              )}
+                              {pass.status !== 'canceled' && (
+                                <TouchableOpacity onPress={(e) => { e.stopPropagation?.(); cancelMembership(pass); }}>
+                                  <Text style={{color:'#FF3B30',fontWeight:'700',fontSize:11}}>Cancel</Text>
+                                </TouchableOpacity>
+                              )}
+                            </View>
+                          )}
                           <Text style={{color:'#34C759',fontWeight:'700',fontSize:12,marginTop:4}}>Tap to show QR →</Text>
                         </TouchableOpacity>
                       );
                     })}
+
+                    {myClassBookings.length > 0 && (<>
+                      <Text style={[styles.sectionLabel,{marginTop:15}]}>📅 Booked Classes</Text>
+                      {myClassBookings.map(b => (
+                        <View key={b.id} style={styles.itemCard}>
+                          <View style={styles.rowJustify}>
+                            <View>
+                              <Text style={styles.itemTitle}>{b.className}</Text>
+                              <Text style={{color:'#666',fontSize:12,marginTop:2}}>
+                                {new Date(b.classDate).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})}
+                                {b.status === 'waitlisted' && <Text style={{color:'#FF9500',fontWeight:'700'}}> · Waitlisted</Text>}
+                              </Text>
+                            </View>
+                            <TouchableOpacity onPress={() => cancelMyBooking(b)}><Text style={{color:'#FF3B30',fontWeight:'700',fontSize:12}}>Cancel</Text></TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    </>)}
 
                     {expiredPasses.length > 0 && (<>
                       <Text style={[styles.sectionLabel,{marginTop:10}]}>Expired Passes</Text>
@@ -2981,6 +3295,18 @@ function IGymApp() {
                     <Text style={{fontWeight:'600',color:'#333'}}>🟢 Open Now Only</Text>
                     <Switch value={searchFilters.openNow} onValueChange={v => setSearchFilters(p=>({...p,openNow:v}))}/>
                   </View>
+                  <View style={[styles.rowJustify,{marginVertical:10,backgroundColor:'#F8F8F8',padding:15,borderRadius:12}]}>
+                    <Text style={{fontWeight:'600',color:'#333'}}>🔥 Active Promotions Only</Text>
+                    <Switch value={searchFilters.activePromosOnly} onValueChange={v => setSearchFilters(p=>({...p,activePromosOnly:v}))}/>
+                  </View>
+                  <Text style={styles.sectionLabel}>Minimum Rating</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom:15}}>
+                    {[0,3,3.5,4,4.5].map(r => (
+                      <TouchableOpacity key={r} style={[styles.filterChip,searchFilters.minRating===r&&styles.filterChipActive]} onPress={() => setSearchFilters(p=>({...p,minRating:r}))}>
+                        <Text style={[styles.filterChipText,searchFilters.minRating===r&&styles.filterChipTextActive]}>{r===0?'Any':`★ ${r}+`}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
                   <Text style={styles.sectionLabel}>Equipment Filters</Text>
                   <TextInput style={styles.input} value={searchFilters.targetMuscle} onChangeText={t => setSearchFilters(p=>({...p,targetMuscle:t}))} placeholder="Target Muscle (e.g. Chest, Quads)"/>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{marginBottom:10}}>
@@ -3148,6 +3474,46 @@ function IGymApp() {
 
               <Text style={{marginVertical:15,color:'#444',lineHeight:22}}>{selectedGym?.description}</Text>
 
+              {isSectionVisible(selectedGym, 'showClasses') && (selectedGym?.classSchedule||[]).length > 0 && (() => {
+                const occurrences = getUpcomingClassOccurrences(selectedGym, 2);
+                const myBookedKeys = new Set(
+                  gymClassBookings.filter(b => b.userId === currentUser?.id && b.status !== 'cancelled').map(b => `${b.classScheduleId}|${b.classDate}`)
+                );
+                return occurrences.length === 0 ? null : (
+                  <View style={{marginBottom:15}}>
+                    <Text style={styles.sectionLabel}>🧘 Classes</Text>
+                    {occurrences.map(occ => {
+                      const key = `${occ.id}|${occ.classDate}`;
+                      const booked = countBookedForOccurrence(gymClassBookings, occ.id, occ.classDate);
+                      const full = occ.capacity > 0 && booked >= occ.capacity;
+                      const alreadyBooked = myBookedKeys.has(key);
+                      return (
+                        <View key={key} style={styles.itemCard}>
+                          <View style={styles.rowJustify}>
+                            <View>
+                              <Text style={styles.itemTitle}>{occ.className}</Text>
+                              <Text style={{color:'#666',fontSize:12,marginTop:2}}>
+                                {new Date(occ.classDate).toLocaleDateString(undefined,{weekday:'short',month:'short',day:'numeric'})} · {occ.startTime}{occ.instructor ? ` · ${occ.instructor}` : ''}
+                              </Text>
+                            </View>
+                            {alreadyBooked ? (
+                              <Text style={{color:'#34C759',fontWeight:'800',fontSize:12}}>✓ Booked</Text>
+                            ) : (
+                              <TouchableOpacity style={{backgroundColor:'#007AFF',paddingHorizontal:14,paddingVertical:8,borderRadius:8}} onPress={() => bookGymClass(occ)}>
+                                <Text style={{color:'#FFF',fontWeight:'700',fontSize:12}}>{full ? 'Join Waitlist' : 'Book'}</Text>
+                              </TouchableOpacity>
+                            )}
+                          </View>
+                          <Text style={{color: full ? '#FF3B30' : '#999', fontSize:11, marginTop:6, fontWeight:'700'}}>
+                            {occ.capacity > 0 ? `${booked}/${occ.capacity} booked` : `${booked} booked`}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                );
+              })()}
+
               {isSectionVisible(selectedGym, 'showEquipment') && (
                 <>
                   <Text style={styles.sectionLabel}>Equipment ({displayEquipment.length})</Text>
@@ -3260,6 +3626,25 @@ function IGymApp() {
                     ))}
                   </ScrollView>
                 </>
+              )}
+
+              <Text style={[styles.sectionLabel,{marginTop:20}]}>💬 Message {selectedGym?.gymName}</Text>
+              {!currentUser ? null : messageThread.length === 0 && !messageDraft ? (
+                <TouchableOpacity style={[styles.primaryBtn,{backgroundColor:'#5856D6',marginBottom:15}]} onPress={openMemberMessageThread}>
+                  <Text style={styles.btnText}>Open conversation</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={{marginBottom:15}}>
+                  {messageThread.map(m => (
+                    <View key={m.id} style={{alignSelf: m.senderRole==='member' ? 'flex-end' : 'flex-start', backgroundColor: m.senderRole==='member' ? '#007AFF20' : '#F0F0F0', borderRadius:10, padding:10, marginBottom:8, maxWidth:'85%'}}>
+                      <Text style={{color:'#333'}}>{m.text}</Text>
+                    </View>
+                  ))}
+                  <View style={styles.row}>
+                    <TextInput style={[styles.input,{flex:1,marginRight:10,marginBottom:0}]} placeholder="Ask a question..." value={messageDraft} onChangeText={setMessageDraft}/>
+                    <TouchableOpacity style={[styles.primaryBtn,{paddingHorizontal:20}]} onPress={sendMemberMessage} disabled={sendingMessage}><Text style={styles.btnText}>Send</Text></TouchableOpacity>
+                  </View>
+                </View>
               )}
 
               <Text style={[styles.sectionLabel,{marginTop:20}]}>Member Reviews</Text>
