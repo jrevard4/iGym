@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 import { loadGyms, incrementMatchImpressions, upsertUser } from '../../../lib/supabase';
 import { getDistanceMiles, getAvgRating, isOpenNow, runLocalMatch, getActivePromotion } from '../../../lib/helpers';
-import { CLASS_TYPES, EQUIP_CATEGORIES, AMENITIES, DEFAULT_LOCATION } from '../../../lib/constants';
+import { CLASS_TYPES, EQUIP_CATEGORIES, AMENITIES, DEFAULT_LOCATION, MAX_SEARCH_RADIUS_MILES } from '../../../lib/constants';
 import { getSession, setSession } from '@/lib/auth';
 import { useT } from '@/lib/PreferencesContext';
 import GymCard from '@/components/GymCard';
@@ -42,18 +42,12 @@ export default function GymsListPage() {
   const [lastSearchTurn, setLastSearchTurn] = useState(null); // { prompt, summary } — for refinement
   const [recentSearches, setRecentSearches] = useState([]);
 
-  // Location (uses browser geo if available, falls back to DEFAULT_LOCATION)
+  // Location (defaults to Columbus, OH until the member explicitly opts in
+  // to sharing their location or searches a city — see LocationControl below.
+  // No silent background geolocation call: requesting it without a user
+  // gesture is both a bad look and increasingly blocked by browsers anyway).
   const [userLoc, setUserLoc] = useState(DEFAULT_LOCATION);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && 'geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => setUserLoc({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
-        () => { /* user denied — stick with default */ },
-        { timeout: 4000 }
-      );
-    }
-  }, []);
+  const [locationLabel, setLocationLabel] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -78,6 +72,7 @@ export default function GymsListPage() {
         const text = `${g.gymName} ${g.location} ${g.description || ''}`.toLowerCase();
         if (!text.includes(q)) return false;
       }
+      if (getDistanceMiles(userLoc.latitude, userLoc.longitude, g.lat, g.lon) > MAX_SEARCH_RADIUS_MILES) return false;
       if (classFilter !== 'All' && !(g.classes || []).includes(classFilter)) return false;
       if (minPrice && g.monthlyPrice < Number(minPrice)) return false;
       if (maxPrice && g.monthlyPrice > Number(maxPrice)) return false;
@@ -259,6 +254,11 @@ export default function GymsListPage() {
 
       {/* ── Filter bar ────────────────────────────────────────────────── */}
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5 mb-8 sticky top-[73px] z-30 shadow-sm">
+        <LocationControl
+          locationLabel={locationLabel}
+          onLocate={(loc, label) => { setUserLoc(loc); setLocationLabel(label); }}
+        />
+
         <input
           type="search"
           value={query}
@@ -416,8 +416,17 @@ export default function GymsListPage() {
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-5xl mb-4" aria-hidden="true">🔍</div>
-          <h2 className="text-xl font-bold mb-2">{t('noGymsMatch')}</h2>
-          <p className="text-gray-600 dark:text-gray-400">{t('tryWidening')}</p>
+          {gyms.length > 0 && gyms.every((g) => getDistanceMiles(userLoc.latitude, userLoc.longitude, g.lat, g.lon) > MAX_SEARCH_RADIUS_MILES) ? (
+            <>
+              <h2 className="text-xl font-bold mb-2">No gyms found{locationLabel ? ` near ${locationLabel}` : ''}</h2>
+              <p className="text-gray-600 dark:text-gray-400">iGym currently only covers gyms within {MAX_SEARCH_RADIUS_MILES} miles of Columbus, OH — try searching a city in that area.</p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-xl font-bold mb-2">{t('noGymsMatch')}</h2>
+              <p className="text-gray-600 dark:text-gray-400">{t('tryWidening')}</p>
+            </>
+          )}
         </div>
       ) : viewMode === 'MAP' ? (
         <GymMap gyms={filtered} userLoc={userLoc} />
@@ -433,6 +442,93 @@ export default function GymsListPage() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Location control ──────────────────────────────────────────────────────
+// Two explicit, user-initiated ways to change the "near me" reference point
+// — never requests geolocation silently on page load (both a bad look and
+// increasingly blocked by browsers without a user gesture anyway). City
+// search is geocoded server-side via /api/geocode (Nominatim), restricted to
+// the US, Canada, and Mexico.
+function LocationControl({ locationLabel, onLocate }) {
+  const [cityQuery, setCityQuery] = useState('');
+  const [isLocating, setIsLocating] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
+  const [error, setError] = useState('');
+
+  const useMyLocation = () => {
+    if (!('geolocation' in navigator)) {
+      setError('Your browser doesn’t support location access.');
+      return;
+    }
+    setError('');
+    setIsLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        onLocate({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }, 'your location');
+        setIsLocating(false);
+      },
+      () => {
+        setError('Location access was denied — search a city instead.');
+        setIsLocating(false);
+      },
+      { timeout: 8000 }
+    );
+  };
+
+  const searchCity = async (e) => {
+    e.preventDefault();
+    const q = cityQuery.trim();
+    if (!q) return;
+    setError('');
+    setIsGeocoding(true);
+    try {
+      const res = await fetch(`/api/geocode?q=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Could not find that city.');
+      onLocate({ latitude: data.lat, longitude: data.lon }, data.displayName);
+    } catch (err) {
+      setError(err.message || 'Could not find that city.');
+    } finally {
+      setIsGeocoding(false);
+    }
+  };
+
+  return (
+    <div className="mb-4 pb-4 border-b border-gray-100 dark:border-gray-800">
+      <div className="flex flex-col sm:flex-row gap-2">
+        <button
+          type="button"
+          onClick={useMyLocation}
+          disabled={isLocating}
+          className="shrink-0 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 text-sm font-semibold px-4 py-2.5 rounded-lg transition disabled:opacity-60"
+        >
+          {isLocating ? 'Locating...' : '📍 Use my location'}
+        </button>
+        <form onSubmit={searchCity} className="flex flex-1 gap-2">
+          <input
+            type="text"
+            value={cityQuery}
+            onChange={(e) => setCityQuery(e.target.value)}
+            placeholder="Search a city in the US, Canada, or Mexico..."
+            aria-label="Search a city"
+            className="flex-1 px-4 py-2.5 border border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 rounded-lg focus:border-brand focus:ring-2 focus:ring-brand/20 outline-none"
+          />
+          <button
+            type="submit"
+            disabled={isGeocoding || !cityQuery.trim()}
+            className="shrink-0 bg-gray-900 hover:bg-gray-800 text-white text-sm font-semibold px-4 py-2.5 rounded-lg transition disabled:opacity-60"
+          >
+            {isGeocoding ? 'Searching...' : 'Search'}
+          </button>
+        </form>
+      </div>
+      {error && <p className="text-xs text-danger mt-2">{error}</p>}
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+        {locationLabel ? `Showing distances from ${locationLabel}.` : 'Showing distances from Columbus, OH (default) — use your location or search a city above.'}
+      </p>
     </div>
   );
 }

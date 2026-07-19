@@ -75,6 +75,7 @@ create table if not exists gyms (
   "pageSettings" jsonb default '{}'::jsonb,  -- per-section show/hide toggles for the owner's public gym page
   "classSchedule" jsonb default '[]'::jsonb, -- recurring weekly class template: [{id, className, dayOfWeek, startTime, durationMinutes, capacity, instructor}]
   suspended boolean default false,           -- platform-admin moderation flag; hides the listing from search/browse
+  "pushToken" text,                          -- owner's mobile device Expo push token, registered from the app (see lib/notify.js)
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -140,6 +141,7 @@ create table if not exists "classBookings" (
   username text,
   "classDate" date not null,
   status text default 'booked', -- 'booked' | 'waitlisted' | 'cancelled'
+  "reminderSent" boolean default false, -- dedup flag for the class-reminder push job (see /api/send-class-reminders)
   created_at timestamptz default now()
 );
 
@@ -362,3 +364,8 @@ create policy "Public upload review photos" on storage.objects
 --   created_at timestamptz default now()
 -- );
 -- create index if not exists idx_messages_conversation on messages ("gymId", "userId");
+--
+-- Phase 12 additions (push notifications, waitlist auto-promotion, class
+-- reminder job):
+-- alter table gyms add column if not exists "pushToken" text;
+-- alter table "classBookings" add column if not exists "reminderSent" boolean default false;

@@ -30,6 +30,23 @@ const stripe = STRIPE_SECRET_KEY ? Stripe(STRIPE_SECRET_KEY) : null;
 const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY) ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
 const app = express();
 
+// Same direct-to-Expo POST as lib/push.js — duplicated here (rather than
+// imported) because this is a separate CommonJS process from the ESM lib/
+// directory the mobile/web apps share. Never throws — a failed notification
+// should never break webhook processing.
+async function sendExpoPush(to, title, body, data = {}) {
+  if (!to) return;
+  try {
+    await fetch('https://exp.host/--/api/v2/push/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Accept-Encoding': 'gzip, deflate' },
+      body: JSON.stringify([{ to, title, body, data }]),
+    });
+  } catch (e) {
+    console.warn('[push] send failed', e.message || e);
+  }
+}
+
 app.use(cors());
 
 // The webhook route needs the raw request body (for Stripe's signature check)
@@ -70,8 +87,16 @@ app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res)
         const invoice = event.data.object;
         const subscriptionId = invoice.subscription;
         if (subscriptionId && supabase) {
-          const { error } = await supabase.from('passes').update({ status: 'past_due' }).eq('stripeSubscriptionId', subscriptionId);
+          const { data: pass, error } = await supabase.from('passes')
+            .update({ status: 'past_due' }).eq('stripeSubscriptionId', subscriptionId)
+            .select().maybeSingle();
           if (error) console.error('[webhook] failed to mark pass past_due:', error.message);
+          if (pass?.userId) {
+            const { data: user } = await supabase.from('users').select('pushToken').eq('id', pass.userId).maybeSingle();
+            if (user?.pushToken) {
+              await sendExpoPush(user.pushToken, 'Payment failed', `We couldn't renew your ${pass.label} membership at ${pass.gymName}. Update your card to keep your access.`);
+            }
+          }
         }
         break;
       }

@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { PLAN_TIERS } from '../../../../lib/constants';
-import { computeCheckinHeatmap } from '../../../../lib/helpers';
-import { loadGymCheckins } from '../../../../lib/supabase';
+import { computeCheckinHeatmap, computeRecurringRevenueStats } from '../../../../lib/helpers';
+import { loadGymCheckins, loadGymPasses } from '../../../../lib/supabase';
 import { useOwnerContext } from '@/lib/ownerContext';
 
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -14,6 +14,7 @@ export default function OwnerAnalyticsPage() {
   const { owner, persistOwner } = useOwnerContext();
   const [copied, setCopied] = useState(false);
   const [heatmap, setHeatmap] = useState(null);
+  const [recurring, setRecurring] = useState(null);
   const plan = PLAN_TIERS[owner.plan || 'free'];
   const planAllows = (feature) => !!plan.limits?.[feature];
 
@@ -21,6 +22,13 @@ export default function OwnerAnalyticsPage() {
     (async () => {
       const checkins = await loadGymCheckins(owner.id);
       setHeatmap(computeCheckinHeatmap(checkins));
+    })();
+  }, [owner.id]);
+
+  useEffect(() => {
+    (async () => {
+      const passes = await loadGymPasses(owner.id);
+      setRecurring(computeRecurringRevenueStats(passes));
     })();
   }, [owner.id]);
 
@@ -63,6 +71,35 @@ export default function OwnerAnalyticsPage() {
           <Stat label="Passes sold" value={owner.monthlyPassSales || 0} color="text-success" />
           <Stat label="Referrals" value={owner.referralCount || 0} color="text-accent" />
         </div>
+      </div>
+
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded-2xl p-5">
+        <h2 className="font-bold text-sm uppercase text-gray-500 dark:text-gray-400 mb-1">🔁 Recurring revenue</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">Auto-renewing memberships only — one-time passes aren&apos;t counted.</p>
+        {!recurring ? (
+          <p className="text-gray-400 dark:text-gray-400 italic text-sm">Loading...</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-3 gap-4 mb-4">
+              <Stat label="MRR" value={`$${recurring.mrr.toFixed(2)}`} color="text-success" />
+              <Stat label="Active" value={recurring.activeCount} color="text-brand-text dark:text-blue-400" />
+              <Stat label="Past due" value={recurring.pastDueCount} color={recurring.pastDueCount > 0 ? 'text-danger' : 'text-gray-400'} />
+            </div>
+            {recurring.pastDue.length > 0 && (
+              <div className="border-t border-gray-100 dark:border-gray-800 pt-3">
+                <div className="text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">⚠ At risk of lapsing</div>
+                <ul className="space-y-1.5">
+                  {recurring.pastDue.map((p) => (
+                    <li key={p.id} className="flex justify-between items-center text-sm">
+                      <span className="text-gray-700 dark:text-gray-300">{p.label} — ${Number(p.price).toFixed(2)}</span>
+                      <a href={`/owner/messages?userId=${p.userId}`} className="text-xs font-semibold text-brand-text dark:text-blue-400 hover:underline">Message</a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <div className="bg-gray-900 dark:bg-gray-950 text-white rounded-2xl p-5 flex items-center justify-between gap-4 flex-wrap border border-transparent dark:border-gray-800">
