@@ -13,14 +13,21 @@
   },
   "jest": {
     "preset": "jest-expo",
-    "testPathIgnorePatterns": ["/node_modules/", "/web/", "/server/"],
-    "setupFiles": ["<rootDir>/jest.setup.js"]
+    "testPathIgnorePatterns": [
+      "/node_modules/",
+      "/web/",
+      "/server/"
+    ],
+    "setupFiles": [
+      "<rootDir>/jest.setup.js"
+    ]
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "1.23.1",
     "@react-native-community/datetimepicker": "8.2.0",
     "@stripe/stripe-react-native": "0.41.0",
     "@supabase/supabase-js": "^2.46.1",
+    "bcryptjs": "^3.0.3",
     "expo": "~52.0.0",
     "expo-image-picker": "~16.0.0",
     "expo-location": "~18.0.0",

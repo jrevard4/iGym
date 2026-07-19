@@ -40,7 +40,11 @@ export const metadata = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: the inline script below intentionally sets the
+    // `dark` class/`lang` attribute on this element before React hydrates (to
+    // avoid a light-mode flash), so its attributes legitimately differ from
+    // what was server-rendered — that's a false-positive mismatch, not a bug.
+    <html lang="en" suppressHydrationWarning>
       <head>
         <link rel="manifest" href="/manifest.json" />
         <meta name="theme-color" content="#007AFF" />
