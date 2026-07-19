@@ -31,6 +31,7 @@ import {
   getDistanceMiles, getAvgRating, renderStars, isOpenNow, getAIMatchScore,
   runLocalMatch, uniqueId, getActivePromotion, computeCheckinStats, findSimilarGyms,
   stripHtmlToText, extractKeywords, isSectionVisible, getUpcomingClassOccurrences, countBookedForOccurrence,
+  computeRecurringRevenueStats,
 } from './lib/helpers';
 import { parseProductFromHtml } from './lib/productImport';
 import {
@@ -229,6 +230,9 @@ function IGymApp() {
     amenities: [], minRating: 0, activePromosOnly: false,
   });
   const [gymSortBy, setGymSortBy] = useState('DISTANCE');
+
+  // --- Owner analytics ---
+  const [recurringStats, setRecurringStats] = useState(null);
 
   // --- Classes & booking ---
   const [gymClassBookings, setGymClassBookings] = useState([]);
@@ -832,6 +836,12 @@ function IGymApp() {
   const loadOwnerRoster = async () => {
     if (!currentOwner?.id) return;
     setOwnerRoster(await loadGymClassBookings(currentOwner.id));
+  };
+
+  const loadOwnerRecurringStats = async () => {
+    if (!currentOwner?.id) return;
+    const passes = await loadGymPasses(currentOwner.id);
+    setRecurringStats(computeRecurringRevenueStats(passes));
   };
 
   const loadOwnerConversations = async () => {
@@ -1738,6 +1748,7 @@ function IGymApp() {
                     }
                     if (key === 'CLASSES') loadOwnerRoster();
                     if (key === 'MESSAGES') loadOwnerConversations();
+                    if (key === 'ANALYTICS') loadOwnerRecurringStats();
                   }}>
                     <Text style={[styles.tabBtnText, ownerTab===key && styles.tabBtnTextActive]}>{label}</Text>
                   </TouchableOpacity>
@@ -1818,6 +1829,45 @@ function IGymApp() {
                         </View>
                       </View>
                     </View>
+
+                    <Text style={styles.sectionLabel}>🔁 Recurring Revenue</Text>
+                    {!recurringStats ? (
+                      <Text style={{color:'#999',fontStyle:'italic',marginBottom:15}}>Loading...</Text>
+                    ) : (
+                      <View style={[styles.infoBox,{marginBottom:15}]}>
+                        <View style={styles.rowJustify}>
+                          <View style={{alignItems:'center',flex:1}}>
+                            <Text style={{fontSize:22,fontWeight:'900',color:'#34C759'}}>${recurringStats.mrr.toFixed(2)}</Text>
+                            <Text style={{color:'#888',fontSize:11,fontWeight:'600'}}>MRR</Text>
+                          </View>
+                          <View style={{alignItems:'center',flex:1}}>
+                            <Text style={{fontSize:22,fontWeight:'900',color:'#007AFF'}}>{recurringStats.activeCount}</Text>
+                            <Text style={{color:'#888',fontSize:11,fontWeight:'600'}}>Active</Text>
+                          </View>
+                          <View style={{alignItems:'center',flex:1}}>
+                            <Text style={{fontSize:22,fontWeight:'900',color: recurringStats.pastDueCount > 0 ? '#FF3B30' : '#CCC'}}>{recurringStats.pastDueCount}</Text>
+                            <Text style={{color:'#888',fontSize:11,fontWeight:'600'}}>Past Due</Text>
+                          </View>
+                        </View>
+                        {recurringStats.pastDue.length > 0 && (
+                          <View style={{marginTop:12,paddingTop:12,borderTopWidth:1,borderTopColor:'#EEE'}}>
+                            <Text style={{fontSize:11,fontWeight:'700',color:'#888',textTransform:'uppercase',marginBottom:8}}>⚠ At Risk of Lapsing</Text>
+                            {recurringStats.pastDue.map(p => (
+                              <View key={p.id} style={[styles.rowJustify,{marginBottom:6}]}>
+                                <Text style={{fontSize:13,color:'#333',flex:1}}>{p.label} — ${Number(p.price).toFixed(2)}</Text>
+                                <TouchableOpacity onPress={() => {
+                                  setOwnerTab('MESSAGES');
+                                  const member = userDatabase.find(u => u.id === p.userId);
+                                  openConversation({ userId: p.userId, username: member?.username || 'member' });
+                                }}>
+                                  <Text style={{color:'#007AFF',fontWeight:'700',fontSize:12}}>Message</Text>
+                                </TouchableOpacity>
+                              </View>
+                            ))}
+                          </View>
+                        )}
+                      </View>
+                    )}
 
                     <Text style={styles.sectionLabel}>🎁 Invite Another Gym</Text>
                     <TouchableOpacity style={[styles.infoBox,{backgroundColor:'#1C1C1E',borderWidth:0}]} onPress={shareOwnerReferralCode}>

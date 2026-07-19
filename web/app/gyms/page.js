@@ -4,7 +4,7 @@ import dynamic from 'next/dynamic';
 import { useEffect, useMemo, useState } from 'react';
 import { loadGyms, incrementMatchImpressions, upsertUser } from '../../../lib/supabase';
 import { getDistanceMiles, getAvgRating, isOpenNow, runLocalMatch, getActivePromotion } from '../../../lib/helpers';
-import { CLASS_TYPES, EQUIP_CATEGORIES, AMENITIES, DEFAULT_LOCATION } from '../../../lib/constants';
+import { CLASS_TYPES, EQUIP_CATEGORIES, AMENITIES, DEFAULT_LOCATION, MAX_SEARCH_RADIUS_MILES } from '../../../lib/constants';
 import { getSession, setSession } from '@/lib/auth';
 import { useT } from '@/lib/PreferencesContext';
 import GymCard from '@/components/GymCard';
@@ -72,6 +72,7 @@ export default function GymsListPage() {
         const text = `${g.gymName} ${g.location} ${g.description || ''}`.toLowerCase();
         if (!text.includes(q)) return false;
       }
+      if (getDistanceMiles(userLoc.latitude, userLoc.longitude, g.lat, g.lon) > MAX_SEARCH_RADIUS_MILES) return false;
       if (classFilter !== 'All' && !(g.classes || []).includes(classFilter)) return false;
       if (minPrice && g.monthlyPrice < Number(minPrice)) return false;
       if (maxPrice && g.monthlyPrice > Number(maxPrice)) return false;
@@ -415,8 +416,17 @@ export default function GymsListPage() {
       ) : filtered.length === 0 ? (
         <div className="text-center py-16">
           <div className="text-5xl mb-4" aria-hidden="true">🔍</div>
-          <h2 className="text-xl font-bold mb-2">{t('noGymsMatch')}</h2>
-          <p className="text-gray-600 dark:text-gray-400">{t('tryWidening')}</p>
+          {gyms.length > 0 && gyms.every((g) => getDistanceMiles(userLoc.latitude, userLoc.longitude, g.lat, g.lon) > MAX_SEARCH_RADIUS_MILES) ? (
+            <>
+              <h2 className="text-xl font-bold mb-2">No gyms found{locationLabel ? ` near ${locationLabel}` : ''}</h2>
+              <p className="text-gray-600 dark:text-gray-400">iGym currently only covers gyms within {MAX_SEARCH_RADIUS_MILES} miles of Columbus, OH — try searching a city in that area.</p>
+            </>
+          ) : (
+            <>
+              <h2 className="text-xl font-bold mb-2">{t('noGymsMatch')}</h2>
+              <p className="text-gray-600 dark:text-gray-400">{t('tryWidening')}</p>
+            </>
+          )}
         </div>
       ) : viewMode === 'MAP' ? (
         <GymMap gyms={filtered} userLoc={userLoc} />
